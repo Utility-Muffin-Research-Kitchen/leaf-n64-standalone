@@ -1,3 +1,35 @@
+# N64 Standalone for Leaf / MLP1
+
+This UMRK fork adapts `josegonzalez/minui-n64-pak` into a Leaf standalone
+emulator payload for Miniloong Pocket 1. It is staged by Leaf under:
+
+```text
+.system/leaf/platforms/mlp1/emulators/mupen64plus/
+```
+
+Primary Leaf commands:
+
+```sh
+make build-mlp1
+make package-mlp1
+make clean
+```
+
+`make package-mlp1` writes `output/mlp1/mupen64plus/`, including `launch.sh`,
+Mupen64Plus binaries/plugins, defaults, bundled runtime libraries, and
+`manifest.json`. The launcher sources Leaf's `launcher/env.sh`, uses the
+canonical `Roms/N64` library, stores battery saves under `Saves/N64`, and stores
+standalone state/config under the shared Leaf runtime-path contract.
+
+MLP1 controls use the Loong Gamepad SDL joystick layout captured by Catastrophe:
+Menu opens the standalone overlay on button 10, Select is button 8, Start is
+button 9, L/R are buttons 4/5, L2/R2 are buttons 6/7, the d-pad is SDL hat 0,
+and C-buttons are available with R2 + ABXY. The overlay opens SDL joystick
+index 0 by default, logs the selected joystick in `mupen64plus.log`, and can be
+pointed at another SDL index for QA with `EMU_OVERLAY_JOYSTICK_INDEX`.
+
+The original upstream README follows for historical context.
+
 # N64 for TrimUI
 
 A MinUI Emu Pak for N64, wrapping the standalone `mupen64plus` N64 emulator (version 2.6.0).

@@ -6,6 +6,8 @@ PUSH_SDCARD_PATH ?= /mnt/SDCARD
 PUSH_PLATFORM ?= tg5040
 
 SHELL := /bin/bash
+DOCKER ?= docker
+TOOLCHAIN_IMAGE ?= ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain:local
 
 # ── Upstream repos and pinned versions ────────────────────────────────────────
 CORE_REPO    := https://github.com/mupen64plus/mupen64plus-core
@@ -70,7 +72,7 @@ DOCKER_SCRIPT := /build/src/.docker-env.sh
 # Top-level targets
 # ══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build tg5040 tg5050 gliden64 rice dist clone patch patches clean \
+.PHONY: all build build-mlp1 package-mlp1 tg5040 tg5050 gliden64 rice dist clone patch patches clean \
        ini-tg5040 ini-tg5050
 
 build: clone patch
@@ -89,6 +91,12 @@ all:
 	$(MAKE) dist-tg5050
 	@echo "=== Build complete. dist/N64.pak/ assembled ==="
 	@find $(DIST) -type f | sort
+
+build-mlp1:
+	DOCKER="$(DOCKER)" TOOLCHAIN_IMAGE="$(TOOLCHAIN_IMAGE)" ./build-mlp1.sh
+
+package-mlp1: build-mlp1
+	./package-mlp1.sh
 
 # ── Clone ─────────────────────────────────────────────────────────────────────
 
@@ -352,7 +360,7 @@ patches:
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -rf $(SRC) $(ROOT)/dist $(ROOT)/include
+	rm -rf $(SRC) $(ROOT)/dist $(ROOT)/include $(ROOT)/workdir $(ROOT)/output
 	rm -f $(PATCHES)/mupen64plus-audio-sdl.patch
 	cd $(ROOT)/tools/ini && make clean
 	rm -rf $(ROOT)/tools/ini/dist

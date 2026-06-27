@@ -34,13 +34,17 @@ Empty placeholder — pulled from the nx-redux build system at `make clone` time
 
 **Target**: `src/mupen64plus-input-sdl/` (upstream tag 2.6.0)
 
-Brick-specific input remapping, gated on `$DEVICE=brick` at runtime (Smart Pro and Smart Pro S are unaffected):
+Handheld input remapping, gated on `$DEVICE=brick` or explicit
+`MUPEN64PLUS_C_BUTTON_MOD=1` at runtime (Smart Pro and Smart Pro S are
+unaffected unless they opt in):
 
 1. **Per-game d-pad ↔ joystick mode**: reads the per-game config file at `$EMU_INPUT_MODE_FILE` (managed by `emu_frontend.c` in the overlay) on every `GetKeys()` call via `stat()` mtime caching. When the file contains `input_mode=joystick`, the physical d-pad (SDL hat 0) is routed through the N64 analog stick (`X_AXIS`/`Y_AXIS` set to ±80) and the N64 d-pad bits are cleared. When `input_mode=dpad` (or file missing), the default hat→d-pad config mapping is left intact. This lets the user toggle d-pad vs joystick mode live via the overlay menu or a shortcut, with the input plugin picking up changes within a single frame.
 
-2. **R2 + ABXY → C-buttons**: when SDL axis 5 (R2 trigger) is positive, face buttons are remapped to C-buttons by physical position: A (right) → C-Right, B (bottom) → C-Down, X (top) → C-Up, Y (left) → C-Left. The original A/B button bits are cleared so both actions don't fire simultaneously. This compensates for the Brick's lack of a right analog stick.
+2. **R2 + ABXY → C-buttons**: when the configured R2 modifier is held, face buttons are remapped to C-buttons by physical position: A (right) → C-Right, B (bottom) → C-Down, X (top) → C-Up, Y (left) → C-Left. The original A/B button bits are cleared so both actions don't fire simultaneously. This compensates for devices without a right analog stick. TrimUI-style devices default to SDL axis 5; MLP1 sets `MUPEN64PLUS_C_BUTTON_MOD_BUTTON=7` because Loong Gamepad exposes L2/R2 as buttons.
 
-Both blocks are wrapped in a `static int is_brick` check that reads `getenv("DEVICE")` once; on non-Brick devices the entire block is skipped.
+The C-button block is wrapped in a cached runtime check that reads `DEVICE` and
+`MUPEN64PLUS_C_BUTTON_MOD` once; non-Brick devices skip it unless the flag is
+set.
 
 ## GLideN64-standalone.patch
 

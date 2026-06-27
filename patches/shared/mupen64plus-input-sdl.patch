@@ -36,37 +36,81 @@ index 974b1db..edaa2c3 100644
          controller[Control].buttons.Y_AXIS = iY;
      }
  
-+    /* Brick-only C-button remap. The Brick has no right analog stick, so
-+     * R2 (axis 5) + ABXY sends C-buttons by physical position:
++    /* Handheld C-button remap. Devices without a right analog stick can opt
++     * in with MUPEN64PLUS_C_BUTTON_MOD=1; the Brick keeps its legacy default.
++     * R2 + ABXY sends C-buttons by physical position. R2 defaults to axis 5
++     * for TrimUI-style devices, but can be moved to a button with
++     * MUPEN64PLUS_C_BUTTON_MOD_BUTTON for devices like MLP1:
 +     *   A (right) → C-Right, B (bottom) → C-Down,
 +     *   X (top) → C-Up, Y (left) → C-Left.
 +     *
 +     * D-pad↔joystick remapping is handled by trimui_inputd at the kernel
 +     * input layer (flag files in /tmp/trimui_inputd/), not here. */
 +    {
-+        static int is_brick = -1;
-+        if (is_brick < 0) {
++        static int enable_c_button_mod = -1;
++        if (enable_c_button_mod < 0) {
++            const char* flag = getenv("MUPEN64PLUS_C_BUTTON_MOD");
 +            const char* d = getenv("DEVICE");
-+            is_brick = (d && strcmp(d, "brick") == 0) ? 1 : 0;
++            enable_c_button_mod =
++                ((flag && flag[0] != '\0' && strcmp(flag, "0") != 0) ||
++                 (d && strcmp(d, "brick") == 0)) ? 1 : 0;
 +        }
-+      if (is_brick) {
++      if (enable_c_button_mod) {
 +        SDL_Joystick *joy = controller[Control].joystick;
 +        if (joy && Control == 0) {
-+            /* R2 modifier (axis 5 > 0): remap ABXY to C-buttons by position */
-+            if (SDL_JoystickGetAxis(joy, 5) > 0) {
-+                if (SDL_JoystickGetButton(joy, 1)) { /* A (right) → C-Right */
++            static int mod_button = -2;
++            static int mod_axis = -2;
++            static int a_button = -2;
++            static int b_button = -2;
++            static int x_button = -2;
++            static int y_button = -2;
++            if (mod_button == -2) {
++                const char* v = getenv("MUPEN64PLUS_C_BUTTON_MOD_BUTTON");
++                mod_button = (v && v[0] != '\0') ? atoi(v) : -1;
++            }
++            if (mod_axis == -2) {
++                const char* v = getenv("MUPEN64PLUS_C_BUTTON_MOD_AXIS");
++                mod_axis = (v && v[0] != '\0') ? atoi(v) : 5;
++            }
++            if (a_button == -2) {
++                const char* v = getenv("MUPEN64PLUS_C_BUTTON_A_BUTTON");
++                a_button = (v && v[0] != '\0') ? atoi(v) : 1;
++            }
++            if (b_button == -2) {
++                const char* v = getenv("MUPEN64PLUS_C_BUTTON_B_BUTTON");
++                b_button = (v && v[0] != '\0') ? atoi(v) : 0;
++            }
++            if (x_button == -2) {
++                const char* v = getenv("MUPEN64PLUS_C_BUTTON_X_BUTTON");
++                x_button = (v && v[0] != '\0') ? atoi(v) : 3;
++            }
++            if (y_button == -2) {
++                const char* v = getenv("MUPEN64PLUS_C_BUTTON_Y_BUTTON");
++                y_button = (v && v[0] != '\0') ? atoi(v) : 2;
++            }
++            int mod_held = 0;
++            if (mod_button >= 0 && mod_button < SDL_JoystickNumButtons(joy))
++                mod_held = SDL_JoystickGetButton(joy, mod_button) != 0;
++            if (!mod_held && mod_axis >= 0 && mod_axis < SDL_JoystickNumAxes(joy))
++                mod_held = SDL_JoystickGetAxis(joy, mod_axis) > 0;
++            if (mod_held) {
++                if (a_button >= 0 && a_button < SDL_JoystickNumButtons(joy) &&
++                    SDL_JoystickGetButton(joy, a_button)) { /* A (right) → C-Right */
 +                    controller[Control].buttons.Value &= ~0x0080; /* clear A_BUTTON */
 +                    controller[Control].buttons.Value |=  0x0100; /* set R_CBUTTON */
 +                }
-+                if (SDL_JoystickGetButton(joy, 0)) { /* B (bottom) → C-Down */
++                if (b_button >= 0 && b_button < SDL_JoystickNumButtons(joy) &&
++                    SDL_JoystickGetButton(joy, b_button)) { /* B (bottom) → C-Down */
 +                    controller[Control].buttons.Value &= ~0x0040; /* clear B_BUTTON */
 +                    controller[Control].buttons.Value |=  0x0400; /* set D_CBUTTON */
 +                }
-+                if (SDL_JoystickGetButton(joy, 3)) { /* X (top) → C-Up */
++                if (x_button >= 0 && x_button < SDL_JoystickNumButtons(joy) &&
++                    SDL_JoystickGetButton(joy, x_button)) { /* X (top) → C-Up */
 +                    controller[Control].buttons.Value &= ~0x0200; /* clear C-Left from config */
 +                    controller[Control].buttons.Value |=  0x0800; /* set U_CBUTTON */
 +                }
-+                if (SDL_JoystickGetButton(joy, 2)) { /* Y (left) → C-Left */
++                if (y_button >= 0 && y_button < SDL_JoystickNumButtons(joy) &&
++                    SDL_JoystickGetButton(joy, y_button)) { /* Y (left) → C-Left */
 +                    controller[Control].buttons.Value &= ~0x0400; /* clear C-Down from config */
 +                    controller[Control].buttons.Value |=  0x0200; /* set L_CBUTTON */
 +                }

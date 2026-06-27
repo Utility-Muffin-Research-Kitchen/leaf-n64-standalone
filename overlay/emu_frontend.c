@@ -52,6 +52,181 @@ static Uint32 s_prevButtons = 0;
 static int s_prevAxisX = 0;
 static int s_prevAxisY = 0;
 
+static int env_int_range(const char* name, int fallback, int min_value, int max_value) {
+	const char* value = getenv(name);
+	char* end = NULL;
+	long parsed;
+
+	if (!value || value[0] == '\0')
+		return fallback;
+	parsed = strtol(value, &end, 10);
+	if (end == value || *end != '\0' || parsed < min_value || parsed > max_value)
+		return fallback;
+	return (int)parsed;
+}
+
+static int menu_button_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_MENU_BUTTON", 8, 0, 31);
+	return cached;
+}
+
+static int select_button_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_SELECT_BUTTON", 6, 0, 31);
+	return cached;
+}
+
+static int start_button_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_START_BUTTON", 7, 0, 31);
+	return cached;
+}
+
+static int l1_button_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_L1_BUTTON", 4, 0, 31);
+	return cached;
+}
+
+static int r1_button_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_R1_BUTTON", 5, 0, 31);
+	return cached;
+}
+
+static int l2_axis_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_L2_AXIS", 2, 0, 7);
+	return cached;
+}
+
+static int r2_axis_index(void) {
+	static int cached = -2;
+	if (cached == -2)
+		cached = env_int_range("EMU_R2_AXIS", 5, 0, 7);
+	return cached;
+}
+
+static int overlay_joystick_index(void) {
+	static int cached = -2;
+	if (cached == -2) {
+		const char* value = getenv("EMU_OVERLAY_JOYSTICK_INDEX");
+		if (!value || value[0] == '\0')
+			value = getenv("EMU_JOYSTICK_INDEX");
+		if (value && value[0] != '\0') {
+			char* end = NULL;
+			long parsed = strtol(value, &end, 10);
+			cached = (end != value && *end == '\0' && parsed >= 0 && parsed <= 15) ? (int)parsed : 0;
+		} else {
+			cached = 0;
+		}
+	}
+	return cached;
+}
+
+static void ensure_overlay_joystick_open(void) {
+	if (s_joy)
+		return;
+
+	int count = SDL_NumJoysticks();
+	if (count <= 0)
+		return;
+
+	int wanted = overlay_joystick_index();
+	int index = wanted;
+	if (index >= count) {
+		fprintf(stderr,
+		        "[Overlay] Requested joystick %d unavailable (count=%d), falling back to 0\n",
+		        wanted,
+		        count);
+		index = 0;
+	}
+
+	s_joy = SDL_JoystickOpen(index);
+	if (s_joy) {
+		const char* name = SDL_JoystickName(s_joy);
+		fprintf(stderr,
+		        "[Overlay] Joystick %d/%d opened: %s buttons=%d axes=%d hats=%d\n",
+		        index,
+		        count,
+		        name ? name : "(unknown)",
+		        SDL_JoystickNumButtons(s_joy),
+		        SDL_JoystickNumAxes(s_joy),
+		        SDL_JoystickNumHats(s_joy));
+	} else {
+		fprintf(stderr,
+		        "[Overlay] Joystick open failed: index=%d count=%d error=%s\n",
+		        index,
+		        count,
+		        SDL_GetError());
+	}
+}
+
+static Uint32 button_mask(int button) {
+	return (button >= 0 && button < 32) ? (1u << button) : 0;
+}
+
+static bool joystick_button_held(int button) {
+	if (!s_joy || button < 0)
+		return false;
+	int count = SDL_JoystickNumButtons(s_joy);
+	return button < count && SDL_JoystickGetButton(s_joy, button) != 0;
+}
+
+static int joystick_axis_value(int axis) {
+	if (!s_joy || axis < 0)
+		return 0;
+	int count = SDL_JoystickNumAxes(s_joy);
+	return axis < count ? SDL_JoystickGetAxis(s_joy, axis) : 0;
+}
+
+static int build_state_path(int slot, char* path, size_t path_size) {
+	const char* dir = getenv("EMU_OVERLAY_STATE_DIR");
+	const char* stem = getenv("EMU_OVERLAY_STATE_STEM");
+
+	if (!path || path_size == 0)
+		return -1;
+	path[0] = '\0';
+	if (!dir || dir[0] == '\0' || !stem || stem[0] == '\0')
+		return -1;
+	if (slot < 0)
+		return snprintf(path, path_size, "%s/%s.state.auto", dir, stem) >= (int)path_size ? -1 : 0;
+	if (slot == 0)
+		return snprintf(path, path_size, "%s/%s.state", dir, stem) >= (int)path_size ? -1 : 0;
+	return snprintf(path, path_size, "%s/%s.state%d", dir, stem, slot) >= (int)path_size ? -1 : 0;
+}
+
+static int save_state_slot(int slot) {
+	char path[512];
+	int fallback_slot = slot < 0 ? 9 : slot;
+
+	if (!s_coreAPI.core_cmd)
+		return -1;
+	if (build_state_path(slot, path, sizeof(path)) == 0)
+		return s_coreAPI.core_cmd(M64CMD_STATE_SAVE, 1, (void*)path);
+	s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, fallback_slot, NULL);
+	return s_coreAPI.core_cmd(M64CMD_STATE_SAVE, 0, NULL);
+}
+
+static int load_state_slot(int slot) {
+	char path[512];
+	int fallback_slot = slot < 0 ? 9 : slot;
+
+	if (!s_coreAPI.core_cmd)
+		return -1;
+	if (build_state_path(slot, path, sizeof(path)) == 0 && access(path, R_OK) == 0)
+		return s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, (void*)path);
+	s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, fallback_slot, NULL);
+	return s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, NULL);
+}
+
 // ---------------------------------------------------------------------------
 // CPU mode (switchable via overlay menu)
 // ---------------------------------------------------------------------------
@@ -398,17 +573,33 @@ N64ButtonMapping* emu_frontend_get_button_mappings(void) {
 	return s_buttonMappings;
 }
 
-static const char* s_btnLabels[] = {
-	"B", "A", "Y", "X", "L1", "R1", "Select", "Start", "Menu",
-	"L3/F1", "R3/F2", NULL
-};
-
 static const char* mod_label(int mod) {
-	if (mod == 8) return "MENU";
-	if (mod == 6) return "SELECT";
-	if (mod == -3) return "L2";   // -(axis_id + 1)
-	if (mod == -6) return "R2";
+	if (mod == menu_button_index()) return "MENU";
+	if (mod == select_button_index()) return "SELECT";
+	if (mod == -(l2_axis_index() + 1)) return "L2";
+	if (mod == -(r2_axis_index() + 1)) return "R2";
 	return "MOD";
+}
+
+static const char* button_label(int button) {
+	static char buf[16];
+
+	if (button == menu_button_index()) return "MENU";
+	if (button == select_button_index()) return "SELECT";
+	if (button == start_button_index()) return "START";
+	if (button == l1_button_index()) return "L1";
+	if (button == r1_button_index()) return "R1";
+	switch (button) {
+	case 0: return "B";
+	case 1: return "A";
+	case 2: return "X";
+	case 3: return "Y";
+	case 9: return "L3/F1";
+	case 10: return "R3/F2";
+	default:
+		snprintf(buf, sizeof(buf), "B%d", button);
+		return buf;
+	}
 }
 
 const char* emu_frontend_binding_label(const N64ButtonMapping* m) {
@@ -420,7 +611,7 @@ const char* emu_frontend_binding_label(const N64ButtonMapping* m) {
 		snprintf(axis_buf, sizeof(axis_buf), "Axis %d%s", m->physical, m->axis_dir > 0 ? "+" : "-");
 		base = axis_buf;
 	} else {
-		base = (m->physical >= 0 && m->physical < 11) ? s_btnLabels[m->physical] : "?";
+		base = button_label(m->physical);
 	}
 	if (m->mod != 0) {
 		snprintf(buf, sizeof(buf), "%s+%s", mod_label(m->mod), base);
@@ -622,11 +813,7 @@ static int check_power_button(void) {
 }
 
 static void handle_sleep(void) {
-	// Auto-save state to slot 9 for NextUI game switcher resume
-	if (s_coreAPI.core_cmd) {
-		s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, 9, NULL);
-		s_coreAPI.core_cmd(M64CMD_STATE_SAVE, 0, NULL);
-	}
+	save_state_slot(-1);
 	// Write auto_resume.txt with relative ROM path so game switcher can resume
 	const char* rom_path = getenv("EMU_ROM_PATH");
 	if (rom_path) {
@@ -707,9 +894,11 @@ void emu_frontend_update_buttons(void) {
 	s_btnState = 0;
 	memcpy(s_axisPrev, s_axisState, sizeof(s_axisPrev));
 	if (!s_joy) return;
-	for (int b = 0; b <= 10; b++)
+	int nb = SDL_JoystickNumButtons(s_joy);
+	if (nb > 32) nb = 32;
+	for (int b = 0; b < nb; b++)
 		if (SDL_JoystickGetButton(s_joy, b))
-			s_btnState |= (1u << b);
+			s_btnState |= button_mask(b);
 	int na = SDL_JoystickNumAxes(s_joy);
 	if (na > 8) na = 8;
 	for (int a = 0; a < na; a++)
@@ -718,13 +907,14 @@ void emu_frontend_update_buttons(void) {
 
 static bool btn_just_pressed(int b) {
 	if (b < 0) return false;
-	uint32_t m = 1u << b;
+	uint32_t m = button_mask(b);
+	if (!m) return false;
 	return (s_btnState & m) && !(s_btnPrev & m);
 }
 
 static bool btn_is_held(int b) {
 	if (b < 0) return false;
-	return (s_btnState & (1u << b)) != 0;
+	return (s_btnState & button_mask(b)) != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +970,7 @@ const char* emu_frontend_shortcut_label(const ShortcutBinding* s) {
 				 s->physical, s->axis_dir > 0 ? "+" : "-");
 		base = axis_buf;
 	} else {
-		base = (s->physical >= 0 && s->physical < 11) ? s_btnLabels[s->physical] : "?";
+		base = button_label(s->physical);
 	}
 	if (s->mod != 0) {
 		snprintf(buf, sizeof(buf), "%s+%s", mod_label(s->mod), base);
@@ -1050,10 +1240,7 @@ static void request_stop(void) {
 // ---------------------------------------------------------------------------
 
 static void trigger_game_switcher(void) {
-	if (s_coreAPI.core_cmd) {
-		s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, s_currentSlot, NULL);
-		s_coreAPI.core_cmd(M64CMD_STATE_SAVE, 0, NULL);
-	}
+	save_state_slot(-1);
 	if (s_overlayInitialized)
 		emu_ovl_save_slot_screenshot(&s_overlay, s_currentSlot);
 	// NextUI checks existence (not content) to show the game switcher screen
@@ -1428,19 +1615,13 @@ static void process_state_shortcuts(void) {
 	}
 
 	if (emu_frontend_shortcut_just_pressed(find_shortcut("shortcut_save_state"))) {
-		if (s_coreAPI.core_cmd) {
-			s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, s_currentSlot, NULL);
-			s_coreAPI.core_cmd(M64CMD_STATE_SAVE, 0, NULL);
-		}
+		save_state_slot(s_currentSlot);
 		if (s_overlayInitialized)
 			emu_ovl_save_slot_screenshot(&s_overlay, s_currentSlot);
 	}
 
 	if (emu_frontend_shortcut_just_pressed(find_shortcut("shortcut_load_state"))) {
-		if (s_coreAPI.core_cmd) {
-			s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, s_currentSlot, NULL);
-			s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, NULL);
-		}
+		load_state_slot(s_currentSlot);
 	}
 
 	if (emu_frontend_shortcut_just_pressed(find_shortcut("shortcut_screenshot"))) {
@@ -1544,8 +1725,7 @@ static void overlay_ensure_init(int w, int h) {
 		const char* resume = getenv("EMU_RESUME_SLOT");
 		if (resume && resume[0] != '\0' && s_coreAPI.core_cmd) {
 			int slot = atoi(resume);
-			s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, slot, NULL);
-			s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, NULL);
+			load_state_slot(slot);
 			unsetenv("EMU_RESUME_SLOT");
 		}
 
@@ -1611,7 +1791,7 @@ static void overlay_ensure_init(int w, int h) {
 static bool check_menu_button(void) {
 	if (!s_joy) return false;
 
-	bool pressed = SDL_JoystickGetButton(s_joy, 8) != 0;
+	bool pressed = joystick_button_held(menu_button_index());
 	bool justPressed = pressed && !s_menuBtnPrev;
 	s_menuBtnPrev = pressed;
 	return justPressed;
@@ -1652,22 +1832,21 @@ static EmuOvlInput poll_overlay_input(void) {
 	s_prevAxisX = axisX;
 	s_prevAxisY = axisY;
 
-	// Buttons — edge detect: only trigger on newly-pressed buttons
-	// SDL button indices: 0=A(hw), 1=B(hw), 2=X(hw), 3=Y(hw), 4=L1, 5=R1, 8=Menu
-	static const int btnMap[] = {0, 1, 4, 5, 8};
+	// Buttons — edge detect: only trigger on newly-pressed buttons.
+	int btnMap[] = {0, 1, l1_button_index(), r1_button_index(), menu_button_index()};
 	Uint32 curButtons = 0;
 	for (int i = 0; i < 5; i++) {
-		if (SDL_JoystickGetButton(s_joy, btnMap[i]))
-			curButtons |= (1u << btnMap[i]);
+		if (joystick_button_held(btnMap[i]))
+			curButtons |= button_mask(btnMap[i]);
 	}
 	Uint32 btnPressed = curButtons & ~s_prevButtons;
 	s_prevButtons = curButtons;
 
-	if (btnPressed & (1u << 0)) input.b    = true;
-	if (btnPressed & (1u << 1)) input.a    = true;
-	if (btnPressed & (1u << 4)) input.l1   = true;
-	if (btnPressed & (1u << 5)) input.r1   = true;
-	if (btnPressed & (1u << 8)) input.menu = true;
+	if (btnPressed & button_mask(0)) input.b = true;
+	if (btnPressed & button_mask(1)) input.a = true;
+	if (btnPressed & button_mask(l1_button_index())) input.l1 = true;
+	if (btnPressed & button_mask(r1_button_index())) input.r1 = true;
+	if (btnPressed & button_mask(menu_button_index())) input.menu = true;
 
 	return input;
 }
@@ -1701,10 +1880,10 @@ static EmuOvlAction run_overlay_loop(void) {
 	s_prevAxisX = SDL_JoystickGetAxis(s_joy, 0);
 	s_prevAxisY = SDL_JoystickGetAxis(s_joy, 1);
 	s_prevButtons = 0;
-	static const int menu_btns[] = {0, 1, 4, 5, 8};
+	int menu_btns[] = {0, 1, l1_button_index(), r1_button_index(), menu_button_index()};
 	for (int i = 0; i < 5; i++) {
-		if (SDL_JoystickGetButton(s_joy, menu_btns[i]))
-			s_prevButtons |= (1u << menu_btns[i]);
+		if (joystick_button_held(menu_btns[i]))
+			s_prevButtons |= button_mask(menu_btns[i]);
 	}
 	SDL_Event ev;
 	while (SDL_PollEvent(&ev)) {}
@@ -1764,7 +1943,7 @@ static EmuOvlAction run_overlay_loop(void) {
 		#define BC_TIMEOUT_MS 5500
 		#define BC_GRACE_MS 200
 		if (s_overlay.bind_capture >= 0 && s_joy) {
-			static int bc_prev_btn[16];
+			static int bc_prev_btn[32];
 			static int bc_prev_axis[8];
 			static bool bc_baselines_set;
 			// Pending dual-purpose input (SELECT/L2/R2 with no combo yet).
@@ -1789,7 +1968,7 @@ static EmuOvlAction run_overlay_loop(void) {
 				// Listening — record baselines once, then edge-detect
 				if (!bc_baselines_set) {
 					int nb = SDL_JoystickNumButtons(s_joy);
-					if (nb > 16) nb = 16;
+					if (nb > 32) nb = 32;
 					for (int b = 0; b < nb; b++)
 						bc_prev_btn[b] = SDL_JoystickGetButton(s_joy, b);
 					int na = SDL_JoystickNumAxes(s_joy);
@@ -1811,24 +1990,24 @@ static EmuOvlAction run_overlay_loop(void) {
 				// MENU: always modifier-only.
 				// SELECT/L2/R2: dual-purpose — modifier if a combo button
 				// is pressed, standalone after a grace period if not.
-				#define MOD_BTN_MENU   8
-				#define MOD_BTN_SELECT 6
-				#define MOD_AXIS_L2    2
-				#define MOD_AXIS_R2    5
+				int mod_btn_menu = menu_button_index();
+				int mod_btn_select = select_button_index();
+				int mod_axis_l2 = l2_axis_index();
+				int mod_axis_r2 = r2_axis_index();
 				int held_mod = 0;
 				bool select_active = false;
 				bool l2_active = false;
 				bool r2_active = false;
 
-				if (SDL_JoystickGetButton(s_joy, MOD_BTN_MENU))
-					held_mod = MOD_BTN_MENU;
-				if (SDL_JoystickGetButton(s_joy, MOD_BTN_SELECT))
+				if (joystick_button_held(mod_btn_menu))
+					held_mod = mod_btn_menu;
+				if (joystick_button_held(mod_btn_select))
 					select_active = true;
 				{
-					int l2 = SDL_JoystickGetAxis(s_joy, MOD_AXIS_L2);
-					int r2 = SDL_JoystickGetAxis(s_joy, MOD_AXIS_R2);
-					int l2_delta = l2 - bc_prev_axis[MOD_AXIS_L2];
-					int r2_delta = r2 - bc_prev_axis[MOD_AXIS_R2];
+					int l2 = joystick_axis_value(mod_axis_l2);
+					int r2 = joystick_axis_value(mod_axis_r2);
+					int l2_delta = l2 - bc_prev_axis[mod_axis_l2];
+					int r2_delta = r2 - bc_prev_axis[mod_axis_r2];
 					if (l2_delta < 0) l2_delta = -l2_delta;
 					if (r2_delta < 0) r2_delta = -r2_delta;
 					if (l2_delta > 16000) l2_active = true;
@@ -1839,27 +2018,27 @@ static EmuOvlAction run_overlay_loop(void) {
 				// For dual-purpose inputs, this is tentative — only applied
 				// if a different button is actually captured this frame.
 				if (!held_mod) {
-					if (select_active) held_mod = MOD_BTN_SELECT;
-					else if (l2_active) held_mod = -(MOD_AXIS_L2 + 1);
-					else if (r2_active) held_mod = -(MOD_AXIS_R2 + 1);
+					if (select_active) held_mod = mod_btn_select;
+					else if (l2_active) held_mod = -(mod_axis_l2 + 1);
+					else if (r2_active) held_mod = -(mod_axis_r2 + 1);
 				}
 
 				// --- Button scan ---
 				// Skip MENU (modifier-only). SELECT, L2, R2 are handled
 				// by the grace period logic below instead of being skipped.
 				int nb = SDL_JoystickNumButtons(s_joy);
-				if (nb > 16) nb = 16;
+				if (nb > 32) nb = 32;
 				for (int b = 0; b < nb; b++) {
 					int cur = SDL_JoystickGetButton(s_joy, b);
 					// MENU is always modifier-only (opens overlay)
-					if (b == MOD_BTN_MENU) {
+					if (b == mod_btn_menu) {
 						bc_prev_btn[b] = cur;
 						continue;
 					}
 					// SELECT: skip if it's currently acting as modifier
 					// (another button will be the binding). Handled by
 					// grace period when pressed alone.
-					if (b == MOD_BTN_SELECT && select_active) {
+					if (b == mod_btn_select && select_active) {
 						continue;
 					}
 					if (cur && !bc_prev_btn[b]) {
@@ -1880,8 +2059,8 @@ static EmuOvlAction run_overlay_loop(void) {
 					int na = SDL_JoystickNumAxes(s_joy);
 					if (na > 8) na = 8;
 					for (int a = 0; a < na; a++) {
-						if ((a == MOD_AXIS_L2 && l2_active) ||
-							(a == MOD_AXIS_R2 && r2_active))
+						if ((a == mod_axis_l2 && l2_active) ||
+							(a == mod_axis_r2 && r2_active))
 							continue;
 						int val = SDL_JoystickGetAxis(s_joy, a);
 						int delta = val - bc_prev_axis[a];
@@ -1907,21 +2086,22 @@ static EmuOvlAction run_overlay_loop(void) {
 					// input as pending; finalize after grace period.
 					if (bc_pending_type == 0) {
 						if (select_active &&
-							SDL_JoystickGetButton(s_joy, MOD_BTN_SELECT) &&
-							!bc_prev_btn[MOD_BTN_SELECT]) {
+							joystick_button_held(mod_btn_select) &&
+							mod_btn_select >= 0 && mod_btn_select < 32 &&
+							!bc_prev_btn[mod_btn_select]) {
 							// SELECT just pressed (edge)
 							bc_pending_type = 1;
-							bc_pending_id = MOD_BTN_SELECT;
+							bc_pending_id = mod_btn_select;
 							bc_pending_at = SDL_GetTicks();
 						} else if (l2_active) {
 							bc_pending_type = 2;
-							bc_pending_id = MOD_AXIS_L2;
-							bc_pending_dir = (SDL_JoystickGetAxis(s_joy, MOD_AXIS_L2) > bc_prev_axis[MOD_AXIS_L2]) ? 1 : -1;
+							bc_pending_id = mod_axis_l2;
+							bc_pending_dir = (joystick_axis_value(mod_axis_l2) > bc_prev_axis[mod_axis_l2]) ? 1 : -1;
 							bc_pending_at = SDL_GetTicks();
 						} else if (r2_active) {
 							bc_pending_type = 2;
-							bc_pending_id = MOD_AXIS_R2;
-							bc_pending_dir = (SDL_JoystickGetAxis(s_joy, MOD_AXIS_R2) > bc_prev_axis[MOD_AXIS_R2]) ? 1 : -1;
+							bc_pending_id = mod_axis_r2;
+							bc_pending_dir = (joystick_axis_value(mod_axis_r2) > bc_prev_axis[mod_axis_r2]) ? 1 : -1;
 							bc_pending_at = SDL_GetTicks();
 						}
 					}
@@ -1934,7 +2114,7 @@ static EmuOvlAction run_overlay_loop(void) {
 							m->is_axis = 0;
 							m->axis_dir = 0;
 							// MENU can still modify standalone SELECT
-							m->mod = (SDL_JoystickGetButton(s_joy, MOD_BTN_MENU)) ? MOD_BTN_MENU : 0;
+							m->mod = joystick_button_held(mod_btn_menu) ? mod_btn_menu : 0;
 						} else {
 							// L2/R2 as standalone axis
 							m->physical = bc_pending_id;
@@ -1942,10 +2122,10 @@ static EmuOvlAction run_overlay_loop(void) {
 							m->axis_dir = bc_pending_dir;
 							// Allow MENU or SELECT as modifier for standalone L2/R2
 							m->mod = 0;
-							if (SDL_JoystickGetButton(s_joy, MOD_BTN_MENU))
-								m->mod = MOD_BTN_MENU;
-							else if (SDL_JoystickGetButton(s_joy, MOD_BTN_SELECT))
-								m->mod = MOD_BTN_SELECT;
+							if (joystick_button_held(mod_btn_menu))
+								m->mod = mod_btn_menu;
+							else if (joystick_button_held(mod_btn_select))
+								m->mod = mod_btn_select;
 						}
 						bound = true;
 						bc_pending_type = 0;
@@ -1954,7 +2134,8 @@ static EmuOvlAction run_overlay_loop(void) {
 
 				// Update SELECT baseline after scan (so edge detection
 				// works on subsequent frames even though we skip it above)
-				bc_prev_btn[MOD_BTN_SELECT] = SDL_JoystickGetButton(s_joy, MOD_BTN_SELECT);
+				if (mod_btn_select >= 0 && mod_btn_select < 32)
+					bc_prev_btn[mod_btn_select] = joystick_button_held(mod_btn_select);
 
 				if (bound) {
 					if (s_overlay.bind_capture < 1000) {
@@ -2207,20 +2388,14 @@ static void handle_overlay_action(EmuOvlAction action) {
 	case EMU_OVL_ACTION_SAVE_STATE: {
 		int slot = emu_ovl_get_action_param(&s_overlay);
 		s_currentSlot = slot;
-		if (s_coreAPI.core_cmd) {
-			s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, slot, NULL);
-			s_coreAPI.core_cmd(M64CMD_STATE_SAVE, 0, NULL);
-		}
+		save_state_slot(slot);
 		emu_ovl_save_slot_screenshot(&s_overlay, slot);
 		break;
 	}
 	case EMU_OVL_ACTION_LOAD_STATE: {
 		int slot = emu_ovl_get_action_param(&s_overlay);
 		s_currentSlot = slot;
-		if (s_coreAPI.core_cmd) {
-			s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, slot, NULL);
-			s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, NULL);
-		}
+		load_state_slot(slot);
 		break;
 	}
 	case EMU_OVL_ACTION_SAVE_CONSOLE:
@@ -2252,9 +2427,7 @@ EmuOvlConfig* emu_frontend_get_overlay_config(void) {
 }
 
 void emu_frontend_frame(int w, int h) {
-	// Ensure joystick is open
-	if (!s_joy && SDL_NumJoysticks() > 0)
-		s_joy = SDL_JoystickOpen(0);
+	ensure_overlay_joystick_open();
 
 	// Power button: sleep on short press, poweroff on long press
 	int pwr = check_power_button();

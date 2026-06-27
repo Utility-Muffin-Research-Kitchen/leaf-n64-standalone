@@ -1,8 +1,10 @@
 # Cloned upstream sources
 src/
+workdir/
 
 # Build output
 dist/
+output/
 tools/ini/build/
 tools/ini/dist/
 

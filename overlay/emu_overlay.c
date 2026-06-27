@@ -6,14 +6,12 @@
 #include <string.h>
 #include <unistd.h>
 
-// Layout constants (pre-scaled) — matching NextUI's common/defines.h.
-// NextUI's desktop platform (1024x768, FIXED_SCALE=3) overrides PADDING to 5,
-// while tg5050 (1280x720, FIXED_SCALE=2) uses the default PADDING=10. We match
-// both by varying ovl_padding at init time.
+// Layout constants (pre-scaled), tuned to Jawaka's RetroArch in-game menu.
 #define PILL_SIZE 30
 #define BUTTON_SIZE 20
 #define BUTTON_MARGIN 5
 #define BUTTON_PADDING 12
+#define PANEL_RADIUS 14
 
 static int ovl_scale = 2;
 static int ovl_padding = 10;
@@ -27,18 +25,18 @@ static int ovl_padding = 10;
 static void build_main_menu(EmuOvl* ovl) {
 	int n = 0;
 
-	snprintf(ovl->main_items[n].label, sizeof(ovl->main_items[n].label), "Continue");
+	snprintf(ovl->main_items[n].label, sizeof(ovl->main_items[n].label), "Resume");
 	ovl->main_items[n].type = EMU_OVL_MAIN_CONTINUE;
 	n++;
 
 	if (ovl->config->save_state) {
-		snprintf(ovl->main_items[n].label, sizeof(ovl->main_items[n].label), "Save");
+		snprintf(ovl->main_items[n].label, sizeof(ovl->main_items[n].label), "Save State");
 		ovl->main_items[n].type = EMU_OVL_MAIN_SAVE;
 		n++;
 	}
 
 	if (ovl->config->load_state) {
-		snprintf(ovl->main_items[n].label, sizeof(ovl->main_items[n].label), "Load");
+		snprintf(ovl->main_items[n].label, sizeof(ovl->main_items[n].label), "Load State");
 		ovl->main_items[n].type = EMU_OVL_MAIN_LOAD;
 		n++;
 	}
@@ -203,8 +201,13 @@ static void load_slot_screenshots(EmuOvl* ovl) {
 		ovl->screenshot_dir[0] == '\0' || ovl->rom_file[0] == '\0')
 		return;
 
-	// Target height: half screen (matches the preview area in render_main_menu)
-	int target_h = ovl->screen_h / 2;
+	int outer = PADDING_PX + S(24);
+	int available_w = ovl->screen_w - outer * 2;
+	int menu_w = available_w * 62 / 100;
+	int preview_w = available_w - menu_w - S(14);
+	int target_h = preview_w * 3 / 4;
+	if (target_h < S(80))
+		target_h = ovl->screen_h / 3;
 
 	for (int i = 0; i < EMU_OVL_MAX_SLOTS; i++) {
 		// Free old icon if loaded
@@ -247,9 +250,8 @@ int emu_ovl_init(EmuOvl* ovl, EmuOvlConfig* cfg, EmuOvlRenderBackend* render,
 	if (game_name)
 		snprintf(ovl->game_name, sizeof(ovl->game_name), "%s", game_name);
 
-	// Scale factor & outer padding — match NextUI per-platform:
-	//   tg5040 Brick (1024x768) → FIXED_SCALE=3, desktop platform's PADDING=5
-	//   tg5050 (1280x720)       → FIXED_SCALE=2, default PADDING=10
+	// Keep upstream's per-resolution scale factors, but draw with Jawaka's
+	// in-game menu spacing and palette.
 	if (screen_w <= 1024) {
 		ovl_scale = 3;
 		ovl_padding = 5;
@@ -285,7 +287,7 @@ int emu_ovl_init(EmuOvl* ovl, EmuOvlConfig* cfg, EmuOvlRenderBackend* render,
 	ovl->icon_b = -1;
 	ovl->icon_dpad_h = -1;
 	if (render->load_icon_rgba) {
-		int icon_h = S(BUTTON_SIZE); // match NextUI's btn_sz = SCALE1(BUTTON_SIZE)
+		int icon_h = S(BUTTON_SIZE);
 		ovl->icon_a = render->load_icon_rgba(icon_a_data, ICON_A_W, ICON_A_H, icon_h);
 		ovl->icon_b = render->load_icon_rgba(icon_b_data, ICON_B_W, ICON_B_H, icon_h);
 		ovl->icon_dpad_h = render->load_icon_rgba(icon_dpad_h_data, ICON_DPAD_H_W, ICON_DPAD_H_H, icon_h);
@@ -307,8 +309,8 @@ void emu_ovl_open(EmuOvl* ovl) {
 	if (ovl->render && ovl->render->capture_frame)
 		ovl->render->capture_frame();
 
-	// Pre-load all slot preview screenshots so they're ready before the
-	// user even highlights Save/Load (matches NextUI which loads on menu open).
+	// Pre-load all slot preview screenshots so they're ready before Save/Load
+	// is highlighted.
 	load_slot_screenshots(ovl);
 }
 
@@ -319,8 +321,7 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 	switch (ovl->state) {
 	// ----- MAIN MENU -----
 	case EMU_OVL_STATE_MAIN_MENU: {
-		// Inline slot cycling when Save or Load is highlighted (d-pad
-		// left/right, matching NextUI's minarch.c:8563-8587)
+		// Inline slot cycling when Save or Load is highlighted.
 		EmuOvlMainItemType sel_type = ovl->main_items[ovl->selected].type;
 		if (sel_type == EMU_OVL_MAIN_SAVE || sel_type == EMU_OVL_MAIN_LOAD) {
 			if (input->left) {
@@ -381,8 +382,7 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 	// ----- SECTION LIST -----
 	case EMU_OVL_STATE_SECTION_LIST:
 		{
-		// +1 for "Save Changes" row at the bottom (matching NextUI's minarch
-		// which puts Save Changes as the last entry in its Options menu).
+		// +1 for "Save Changes" row at the bottom.
 		int total_entries = ovl->config->section_count + 1;
 		if (input->up) {
 			ovl->selected = (ovl->selected - 1 + total_entries) % total_entries;
@@ -557,7 +557,7 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 }
 
 // ---------------------------------------------------------------------------
-// Rendering — settings-page style (matching NextUI's UI_renderSettingsPage)
+// Rendering — Jawaka in-game menu style.
 // ---------------------------------------------------------------------------
 
 // Pill-shaped rounded rect (radius = height/2). Delegates to the backend's
@@ -570,21 +570,49 @@ static void draw_pill(EmuOvlRenderBackend* r, int x, int y, int w, int h,
 		r->draw_rect(x, y, w, h, color);
 }
 
-// Compute vertically centered list_y for n items, reserving space for the
-// top title pill and the bottom footer pill.
-static int calc_centered_list_y(EmuOvl* ovl, int item_count) {
-	int reserved = PADDING_PX + S(PILL_SIZE) + PADDING_PX;
-	int top = reserved;
-	int bottom = ovl->screen_h - reserved;
-	int total_h = item_count * S(PILL_SIZE);
-	return top + (bottom - top - total_h) / 2;
+static int content_margin(void) {
+	return S(24);
 }
 
-// Draw text with a 1px black shadow for readability on game background
-static void draw_shadowed_text(EmuOvlRenderBackend* r, const char* text, int x, int y,
-							   uint32_t color, int font_id) {
-	r->draw_text(text, x + 1, y + 1, EMU_OVL_COLOR_BLACK, font_id);
-	r->draw_text(text, x, y, color, font_id);
+static int content_x(void) {
+	return PADDING_PX + content_margin();
+}
+
+static int content_w(const EmuOvl* ovl) {
+	return ovl->screen_w - (PADDING_PX + content_margin()) * 2;
+}
+
+static int content_top(void) {
+	return PADDING_PX + S(58);
+}
+
+static int content_bottom(const EmuOvl* ovl) {
+	return ovl->screen_h - PADDING_PX - S(58);
+}
+
+static void draw_panel(EmuOvl* ovl, int x, int y, int w, int h, uint32_t color) {
+	EmuOvlRenderBackend* r = ovl->render;
+	if (w <= 0 || h <= 0)
+		return;
+	if (r->draw_rounded_rect)
+		r->draw_rounded_rect(x, y, w, h, S(PANEL_RADIUS), color);
+	else
+		r->draw_rect(x, y, w, h, color);
+}
+
+static void draw_content_panel(EmuOvl* ovl, int top, int bottom) {
+	int x = PADDING_PX + S(8);
+	int w = ovl->screen_w - x * 2;
+	draw_panel(ovl, x, top, w, bottom - top, EMU_OVL_COLOR_PANEL);
+}
+
+// Compute vertically centered list_y for n items, reserving space for the
+// title and footer areas used by Jawaka's in-game menu.
+static int calc_centered_list_y(EmuOvl* ovl, int item_count) {
+	int top = content_top() + S(12);
+	int bottom = content_bottom(ovl) - S(10);
+	int total_h = item_count * S(PILL_SIZE);
+	return top + (bottom - top - total_h) / 2;
 }
 
 // Strip ROM metadata from a game name: drop anything from the first " (" or
@@ -618,30 +646,22 @@ static void shorten_title(EmuOvlRenderBackend* r, const char* in, char* out,
 	}
 }
 
-// Draw the title inside a dark rounded pill at the top-left
-// (matches NextUI Quick Menu's GFX_blitPillLight call on ASSET_WHITE_PILL)
+// Draw the title like Jawaka's in-game header: themed text over a soft panel.
 static void draw_menu_bar(EmuOvl* ovl, const char* title) {
 	EmuOvlRenderBackend* r = ovl->render;
-	int pill_h = S(PILL_SIZE);
-	int pad = S(BUTTON_PADDING);
+	int pad = content_margin();
+	int title_h = r->text_height(EMU_OVL_FONT_LARGE);
 
 	// Available inner width = screen - side padding - pill internal padding
 	int max_inner_w = ovl->screen_w - PADDING_PX * 2 - pad * 2;
 	char display[256];
 	shorten_title(r, title, display, sizeof(display), max_inner_w);
 
-	int text_w = r->text_width(display, EMU_OVL_FONT_LARGE);
-	int pill_w = text_w + pad * 2;
-	int max_pill_w = ovl->screen_w - PADDING_PX * 2;
-	if (pill_w > max_pill_w)
-		pill_w = max_pill_w;
-	int x = PADDING_PX;
-	int y = PADDING_PX;
-
-	draw_pill(r, x, y, pill_w, pill_h, EMU_OVL_COLOR_ROW_BG);
-
-	int text_y = y + (pill_h - r->text_height(EMU_OVL_FONT_LARGE)) / 2;
-	r->draw_text(display, x + pad, text_y, EMU_OVL_COLOR_WHITE, EMU_OVL_FONT_LARGE);
+	int panel_y = PADDING_PX + S(4);
+	int panel_h = title_h + S(20);
+	draw_content_panel(ovl, panel_y, panel_y + panel_h);
+	r->draw_text(display, content_x(), panel_y + (panel_h - title_h) / 2,
+				 EMU_OVL_COLOR_TEXT, EMU_OVL_FONT_LARGE);
 }
 
 // Map a button name to its icon handle, or -1 if no icon loaded
@@ -650,14 +670,10 @@ static int get_hint_icon(EmuOvl* ovl, const char* btn_name) {
 		return ovl->icon_a;
 	if (strcmp(btn_name, "B") == 0)
 		return ovl->icon_b;
-	if (strcmp(btn_name, "LEFT/RIGHT") == 0)
-		return ovl->icon_dpad_h;
 	return -1;
 }
 
-// Measure a button glyph's width (a circle for single-char labels like "A"/"B",
-// a pill for multi-char labels like "POWER", or a loaded PNG icon for special
-// hints like "LEFT/RIGHT"). Mirrors NextUI's GFX_getButtonWidth.
+// Measure a button glyph's width.
 static int measure_button_glyph(EmuOvl* ovl, const char* btn, int btn_inner_h) {
 	EmuOvlRenderBackend* r = ovl->render;
 	if (strlen(btn) == 1) {
@@ -668,26 +684,23 @@ static int measure_button_glyph(EmuOvl* ovl, const char* btn, int btn_inner_h) {
 	int icon_id = get_hint_icon(ovl, btn);
 	if (icon_id >= 0 && r->icon_width)
 		return r->icon_width(icon_id);
-	// Plain multi-char button (POWER/MENU): pill at BUTTON_SIZE/2 + text_w width,
-	// text in font.tiny
+	// Plain multi-char button.
 	int tw = r->text_width(btn, EMU_OVL_FONT_TINY);
 	return btn_inner_h / 2 + tw;
 }
 
-// Draw a single button glyph at (gx, gy). btn_inner_h is the inner pill height
-// (== BUTTON_SIZE scaled). Returns the glyph width. Mirrors NextUI's
-// single-char and multi-char branches of GFX_blitButton.
+// Draw a single button glyph at (gx, gy). btn_inner_h is the inner pill height.
 static int draw_button_glyph(EmuOvl* ovl, const char* btn, int gx, int gy,
 							 int btn_inner_h) {
 	EmuOvlRenderBackend* r = ovl->render;
 	if (strlen(btn) == 1) {
-		// Filled white circle + centered dark letter in font.medium
-		draw_pill(r, gx, gy, btn_inner_h, btn_inner_h, EMU_OVL_COLOR_ROW_SEL);
+		// Jawaka footer glyph: accent circle with light text.
+		draw_pill(r, gx, gy, btn_inner_h, btn_inner_h, EMU_OVL_COLOR_HIGHLIGHT);
 		int tw = r->text_width(btn, EMU_OVL_FONT_MEDIUM);
 		int th = r->text_height(EMU_OVL_FONT_MEDIUM);
 		r->draw_text(btn, gx + (btn_inner_h - tw) / 2,
 					 gy + (btn_inner_h - th) / 2,
-					 EMU_OVL_COLOR_TEXT_SEL, EMU_OVL_FONT_MEDIUM);
+					 EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_MEDIUM);
 		return btn_inner_h;
 	}
 	// PNG icon path for special hints (d-pad)
@@ -696,34 +709,29 @@ static int draw_button_glyph(EmuOvl* ovl, const char* btn, int gx, int gy,
 		r->draw_icon(icon_id, gx, gy);
 		return r->icon_width(icon_id);
 	}
-	// Multi-char inner pill (POWER/MENU): width = BUTTON_SIZE/2 + text_w,
-	// text in font.tiny, drawn at BUTTON_SIZE/4 offset from the pill's left edge.
+	// Multi-char inner pill.
 	int tw = r->text_width(btn, EMU_OVL_FONT_TINY);
 	int w = btn_inner_h / 2 + tw;
-	draw_pill(r, gx, gy, w, btn_inner_h, EMU_OVL_COLOR_ROW_SEL);
+	draw_pill(r, gx, gy, w, btn_inner_h, EMU_OVL_COLOR_HIGHLIGHT);
 	int th = r->text_height(EMU_OVL_FONT_TINY);
 	r->draw_text(btn, gx + btn_inner_h / 4, gy + (btn_inner_h - th) / 2,
-				 EMU_OVL_COLOR_TEXT_SEL, EMU_OVL_FONT_TINY);
+				 EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_TINY);
 	return w;
 }
 
-// Draw a button-hint group inside a dark rounded outer pill.
+// Draw a button-hint group inside a themed rounded outer pill.
 // Entries alternate: button_label, action_label, button_label, action_label, …
 // align_right = true → bottom-right anchored, else bottom-left.
 //
-// Mirrors NextUI's GFX_blitButtonGroup layout: all inner gaps are BUTTON_MARGIN
-// (= 5 scaled), so the outer pill content width is:
-//   ow = BM + sum_i(BM + glyph_i + BM + label_i + BM) + BM
+// Uses the same paired button/action rhythm as Jawaka's footer.
 static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 							  bool align_right) {
 	EmuOvlRenderBackend* r = ovl->render;
 	int pill_h = S(PILL_SIZE);
 	int inner_h = S(BUTTON_SIZE);
-	int bm = S(BUTTON_MARGIN);	// all inner margins are BUTTON_MARGIN per NextUI
+	int bm = S(BUTTON_MARGIN);
 
-	// Pass 1: measure total width using NextUI's per-pair formula:
-	//   pair_w = glyph + BM + label + BM
-	//   ow = BM + (BM + pair_w) * N = sum + (2*N + 1) * BM + sum_glyphs + sum_labels
+	// Pass 1: measure total width.
 	int group_w = bm;
 	for (int i = 0; i < hint_count; i += 2) {
 		int pair_w = measure_button_glyph(ovl, hints[i], inner_h);
@@ -736,8 +744,8 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 	int x = align_right ? (ovl->screen_w - PADDING_PX - group_w) : PADDING_PX;
 	int y = ovl->screen_h - PADDING_PX - pill_h;
 
-	// Outer dark pill
-	draw_pill(r, x, y, group_w, pill_h, EMU_OVL_COLOR_ROW_BG);
+	// Outer theme-coloured pill, matching Jawaka's footer underlay.
+	draw_pill(r, x, y, group_w, pill_h, EMU_OVL_COLOR_PANEL);
 
 	// Pass 2: draw contents. Start at x + BM, advance by (pair_w + BM) per pair.
 	int cx = x + bm;
@@ -749,7 +757,7 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 		int label_w = 0;
 		if (i + 1 < hint_count) {
 			r->draw_text(hints[i + 1], label_x, text_y,
-						 EMU_OVL_COLOR_WHITE, EMU_OVL_FONT_SMALL);
+						 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_SMALL);
 			label_w = r->text_width(hints[i + 1], EMU_OVL_FONT_SMALL);
 		}
 		// pair_w = gw + bm + label_w + bm; advance by pair_w + bm
@@ -758,7 +766,7 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 }
 
 // Is this button a navigation hint (d-pad, L/R, etc.) that should go in the
-// left-aligned group, per NextUI's two-group footer convention?
+// left-aligned group?
 static bool is_nav_hint(const char* btn) {
 	return strcmp(btn, "LEFT/RIGHT") == 0 ||
 		   strcmp(btn, "UP/DOWN") == 0 ||
@@ -766,12 +774,8 @@ static bool is_nav_hint(const char* btn) {
 		   strcmp(btn, "L1/R1") == 0;
 }
 
-// Draw the full bottom hint row, splitting the passed hints into two groups
-// per NextUI's convention (see e.g. battery.c:760 where GFX_blitButtonGroup is
-// called twice — nav hints left-aligned, action hints right-aligned):
-//   - Left pill:  navigation hints (d-pad, L/R, …). If none are passed we
-//                 fall back to POWER/SLEEP (the Quick Menu hardware hint).
-//   - Right pill: action hints (A, B, etc.)
+// Draw the full bottom hint row, splitting navigation hints left and actions
+// right like Jawaka's in-game footer.
 static void draw_footer_hints(EmuOvl* ovl, const char* hints[], int hint_count) {
 	const char* left[16];
 	const char* right[16];
@@ -791,19 +795,13 @@ static void draw_footer_hints(EmuOvl* ovl, const char* hints[], int hint_count) 
 		}
 	}
 
-	if (left_count == 0) {
-		// Quick-Menu style: no nav hints, so show the POWER/SLEEP hardware hint
-		const char* power_hint[] = {"POWER", "SLEEP"};
-		draw_button_group(ovl, power_hint, 2, false);
-	} else {
+	if (left_count > 0)
 		draw_button_group(ovl, left, left_count, false);
-	}
 	if (right_count > 0)
 		draw_button_group(ovl, right, right_count, true);
 }
 
-// Draw a settings row (label on left, optional value on right)
-// Matches the visual style of UI_renderSettingsRow from ui_list.c
+// Draw an in-game menu row (label on left, optional value on right).
 static void draw_settings_row(EmuOvl* ovl, int x, int y, int w, int h,
 							  const char* label, const char* value,
 							  bool selected, bool cycleable, int label_font) {
@@ -811,20 +809,12 @@ static void draw_settings_row(EmuOvl* ovl, int x, int y, int w, int h,
 	int row_pad = S(BUTTON_PADDING);
 
 	if (selected) {
+		draw_pill(r, x - S(10), y + S(2), w, h - S(4), EMU_OVL_COLOR_HIGHLIGHT);
 		if (value) {
-			// 2-layer: full-width COLOR2 + label-width COLOR1
-			draw_pill(r, x, y, w, h, EMU_OVL_COLOR_ROW_BG);
-
-			int lw = r->text_width(label, label_font);
-			int label_pill_w = lw + row_pad * 2;
-			draw_pill(r, x, y, label_pill_w, h, EMU_OVL_COLOR_ROW_SEL);
-
-			// Label text (black on white pill)
 			int text_y_pos = y + (h - r->text_height(label_font)) / 2;
 			r->draw_text(label, x + row_pad, text_y_pos,
-						 EMU_OVL_COLOR_TEXT_SEL, label_font);
+						 EMU_OVL_COLOR_HIGHLIGHT_TEXT, label_font);
 
-			// Value text (white, right-aligned, with arrows if cycleable)
 			char display[192];
 			if (cycleable)
 				snprintf(display, sizeof(display), "< %s >", value);
@@ -834,28 +824,23 @@ static void draw_settings_row(EmuOvl* ovl, int x, int y, int w, int h,
 			int vw = r->text_width(display, EMU_OVL_FONT_TINY);
 			int val_x = x + w - row_pad - vw;
 			int val_y = y + (h - r->text_height(EMU_OVL_FONT_TINY)) / 2;
-			r->draw_text(display, val_x, val_y, EMU_OVL_COLOR_WHITE, EMU_OVL_FONT_TINY);
+			r->draw_text(display, val_x, val_y, EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_TINY);
 		} else {
-			// Single label rect (no value)
-			int lw = r->text_width(label, label_font);
-			int label_pill_w = lw + row_pad * 2;
-			draw_pill(r, x, y, label_pill_w, h, EMU_OVL_COLOR_ROW_SEL);
-
 			int text_y_pos = y + (h - r->text_height(label_font)) / 2;
 			r->draw_text(label, x + row_pad, text_y_pos,
-						 EMU_OVL_COLOR_TEXT_SEL, label_font);
+						 EMU_OVL_COLOR_HIGHLIGHT_TEXT, label_font);
 		}
 	} else {
-		// Unselected: no background, white text with shadow for readability
+		// Unselected: the underlay guarantees contrast over the paused frame.
 		int text_y_pos = y + (h - r->text_height(label_font)) / 2;
-		draw_shadowed_text(r, label, x + row_pad, text_y_pos,
-						   EMU_OVL_COLOR_WHITE, label_font);
+		r->draw_text(label, x + row_pad, text_y_pos,
+					 EMU_OVL_COLOR_TEXT, label_font);
 
 		if (value) {
 			int vw = r->text_width(value, EMU_OVL_FONT_TINY);
 			int val_x = x + w - row_pad - vw;
 			int val_y = y + (h - r->text_height(EMU_OVL_FONT_TINY)) / 2;
-			draw_shadowed_text(r, value, val_x, val_y, EMU_OVL_COLOR_WHITE, EMU_OVL_FONT_TINY);
+			r->draw_text(value, val_x, val_y, EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
 		}
 	}
 }
@@ -871,99 +856,75 @@ static void render_main_menu(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
 	draw_menu_bar(ovl, ovl->game_name);
+	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
-	int content_x = PADDING_PX;
-	int content_w = ovl->screen_w - PADDING_PX * 2;
+	int x = content_x();
+	int w = content_w(ovl);
 
 	int vis_count = ovl->main_item_count;
 	if (vis_count > ovl->items_per_page)
 		vis_count = ovl->items_per_page;
-	// Vertically center the list between the title pill and the footer pill,
-	// matching NextUI's minarch.c Menu_loop():
-	//   oy = ((DEVICE_HEIGHT/FIXED_SCALE - PADDING*2) - (n * PILL_SIZE)) / 2
 	int list_y = calc_centered_list_y(ovl, vis_count);
 
-	// Only use left half for menu items (right half reserved for save preview)
-	int menu_w = ovl->screen_w / 2;
+	EmuOvlMainItemType sel_type = ovl->main_items[ovl->selected].type;
+	bool preview_active = (sel_type == EMU_OVL_MAIN_SAVE || sel_type == EMU_OVL_MAIN_LOAD);
+	int menu_w = preview_active ? (w * 62 / 100) : w;
 
 	for (int i = 0; i < vis_count; i++) {
 		int iy = list_y + i * row_h;
 		bool sel = (i == ovl->selected);
-		draw_settings_row(ovl, content_x, iy, menu_w - PADDING_PX, row_h,
+		draw_settings_row(ovl, x, iy, menu_w, row_h,
 						  ovl->main_items[i].label, NULL, sel, false,
 						  EMU_OVL_FONT_LARGE);
 	}
 
-	// Save state preview panel on the right when Save or Load is highlighted.
-	// Layout matches NextUI's minarch.c:8743-8788 exactly.
-	EmuOvlMainItemType sel_type = ovl->main_items[ovl->selected].type;
-	if (sel_type == EMU_OVL_MAIN_SAVE || sel_type == EMU_OVL_MAIN_LOAD) {
-#define WINDOW_RADIUS 4
-#define PAGINATION_HEIGHT 6
-
-		int hw = ovl->screen_w / 2;
-		int hh = ovl->screen_h / 2;
-		int pw = hw + S(WINDOW_RADIUS * 2);
-		int ph = hh + S(WINDOW_RADIUS * 2 + PAGINATION_HEIGHT + WINDOW_RADIUS);
-		int win_x = ovl->screen_w - pw - PADDING_PX;
-		int win_y = (ovl->screen_h - ph) / 2;
-
-		// White rounded window background (NextUI's ASSET_STATE_BG = RGB_WHITE)
-		if (r->draw_rounded_rect)
-			r->draw_rounded_rect(win_x, win_y, pw, ph, S(WINDOW_RADIUS),
-								 EMU_OVL_COLOR_WHITE);
-		else
-			r->draw_rect(win_x, win_y, pw, ph, EMU_OVL_COLOR_WHITE);
-
-		int img_x = win_x + S(WINDOW_RADIUS);
-		int img_y = win_y + S(WINDOW_RADIUS);
-
-		// Black fill behind the screenshot area
-		r->draw_rect(img_x, img_y, hw, hh, EMU_OVL_COLOR_BLACK);
-
-		// Screenshot or fallback text
+	if (preview_active) {
+		int gap = S(14);
+		int pv_x = x + menu_w + gap;
+		int pv_w = x + w - pv_x;
+		int pv_h = pv_w * 3 / 4;
+		int max_h = content_bottom(ovl) - list_y - S(42);
+		if (pv_h > max_h)
+			pv_h = max_h;
+		int pv_y = list_y;
+		draw_panel(ovl, pv_x, pv_y, pv_w, pv_h, EMU_OVL_COLOR_PREVIEW_BG);
 		int icon_id = ovl->slot_icons[ovl->save_slot];
 		if (icon_id >= 0 && r->draw_icon) {
-			r->draw_icon(icon_id, img_x, img_y);
+			r->draw_icon(icon_id, pv_x, pv_y);
 		} else {
-			draw_centered_text(r, "Empty Slot",
-							   img_x + hw / 2, img_y + hh / 2,
-							   EMU_OVL_COLOR_GRAY, EMU_OVL_FONT_LARGE);
+			draw_centered_text(r, "No save in this slot",
+							   pv_x + pv_w / 2, pv_y + pv_h / 2,
+							   EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_SMALL);
 		}
 
-		// Pagination dots (centered horizontally in the window, below screenshot)
-		// Pagination dots — centered within the window using NextUI's exact
-		// formula: ox (= img_x) + (pw - SCALE1(15*SLOT_COUNT)) / 2
 		int dot_spacing = S(15);
 		int dots_total_w = dot_spacing * EMU_OVL_MAX_SLOTS;
-		int dots_x = img_x + (pw - dots_total_w) / 2;
-		int dots_y = img_y + hh + S(WINDOW_RADIUS);
+		int dots_x = pv_x + (pv_w - dots_total_w) / 2;
+		int dots_y = pv_y + pv_h + S(12);
 		for (int i = 0; i < EMU_OVL_MAX_SLOTS; i++) {
 			int dx = dots_x + i * dot_spacing;
 			if (i == ovl->save_slot) {
-				// Current slot: larger BLACK circle (6×6 unscaled)
-				draw_pill(r, dx, dots_y, S(6), S(6), EMU_OVL_COLOR_BLACK);
+				draw_pill(r, dx, dots_y, S(6), S(6), EMU_OVL_COLOR_HIGHLIGHT);
 			} else {
-				// Other slots: smaller circle (2×2 unscaled), offset +4px/+S(2)
-				// NextUI TRIAD_LIGHT_GRAY = 0x7F,0x7F,0x7F
-				draw_pill(r, dx + 4, dots_y + S(2), S(2), S(2), 0xFF7F7F7F);
+				draw_pill(r, dx + S(2), dots_y + S(2), S(2), S(2), EMU_OVL_COLOR_HINT);
 			}
 		}
 	}
 
-	const char* hints[] = {"B", "BACK", "A", "OKAY"};
-	draw_footer_hints(ovl, hints, 4);
+	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Resume", "A", "OK"};
+	draw_footer_hints(ovl, hints, 8);
 }
 
 static void render_section_list(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
 	draw_menu_bar(ovl, "Options");
+	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
-	int content_x = PADDING_PX;
-	int content_w = ovl->screen_w - PADDING_PX * 2;
+	int x = content_x();
+	int w = content_w(ovl);
 
 	// +1 for "Save Changes" row at the bottom
 	int total_count = ovl->config->section_count + 1;
@@ -988,7 +949,7 @@ static void render_section_list(EmuOvl* ovl) {
 			name = ovl->config->sections[idx].name;
 		else
 			name = "Save Changes";
-		draw_settings_row(ovl, content_x, iy, content_w, row_h,
+		draw_settings_row(ovl, x, iy, w, row_h,
 						  name, NULL, sel, false, EMU_OVL_FONT_LARGE);
 	}
 
@@ -998,11 +959,11 @@ static void render_section_list(EmuOvl* ovl) {
 		int tw = r->text_width(ovl->config->options_hint, EMU_OVL_FONT_TINY);
 		r->draw_text(ovl->config->options_hint,
 					 (ovl->screen_w - tw) / 2, hint_y,
-					 EMU_OVL_COLOR_GRAY, EMU_OVL_FONT_TINY);
+					 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
 	}
 
-	const char* hints[] = {"B", "BACK", "A", "OPEN"};
-	draw_footer_hints(ovl, hints, 4);
+	const char* hints[] = {"UP/DOWN", "Move", "B", "Back", "A", "Open"};
+	draw_footer_hints(ovl, hints, 6);
 }
 
 static void render_section_items(EmuOvl* ovl) {
@@ -1010,12 +971,13 @@ static void render_section_items(EmuOvl* ovl) {
 	EmuOvlSection* sec = &ovl->config->sections[ovl->current_section];
 
 	draw_menu_bar(ovl, sec->name);
+	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
 	int items_per_page = ovl->items_per_page;
 	int list_y = calc_centered_list_y(ovl, items_per_page);
-	int content_x = PADDING_PX;
-	int content_w = ovl->screen_w - PADDING_PX * 2;
+	int x = content_x();
+	int w = content_w(ovl);
 
 	bool is_input = (strcmp(sec->name, "Controls") == 0);
 	bool is_shortcuts = (strcmp(sec->name, "Shortcuts") == 0);
@@ -1046,7 +1008,7 @@ static void render_section_items(EmuOvl* ovl) {
 			EmuOvlItem* item = &sec->items[idx];
 			char val_buf[64];
 			const char* val_str = get_item_display_value(item, val_buf, sizeof(val_buf));
-			draw_settings_row(ovl, content_x, iy, content_w, row_h,
+			draw_settings_row(ovl, x, iy, w, row_h,
 							  item->label, val_str, sel, true,
 							  EMU_OVL_FONT_SMALL);
 		} else if (is_input && idx < sec->item_count + remap_rows) {
@@ -1068,7 +1030,7 @@ static void render_section_items(EmuOvl* ovl) {
 			} else {
 				val = emu_frontend_binding_label(&mappings[ri]);
 			}
-			draw_settings_row(ovl, content_x, iy, content_w, row_h,
+			draw_settings_row(ovl, x, iy, w, row_h,
 							  mappings[ri].name, val, sel, false,
 							  EMU_OVL_FONT_SMALL);
 		} else if (is_shortcuts && idx >= sec->item_count &&
@@ -1092,12 +1054,12 @@ static void render_section_items(EmuOvl* ovl) {
 			} else {
 				val = emu_frontend_shortcut_label(&shortcuts[si]);
 			}
-			draw_settings_row(ovl, content_x, iy, content_w, row_h,
+			draw_settings_row(ovl, x, iy, w, row_h,
 							  shortcuts[si].label, val, sel, false,
 							  EMU_OVL_FONT_SMALL);
 		} else {
 			// "Reset to Default" row (last)
-			draw_settings_row(ovl, content_x, iy, content_w, row_h,
+			draw_settings_row(ovl, x, iy, w, row_h,
 							  "Reset to Default", NULL, sel, false,
 							  EMU_OVL_FONT_SMALL);
 		}
@@ -1113,24 +1075,25 @@ static void render_section_items(EmuOvl* ovl) {
 			int tw = r->text_width(sel_item->description, EMU_OVL_FONT_TINY);
 			r->draw_text(sel_item->description,
 						 (ovl->screen_w - tw) / 2, desc_cy,
-						 EMU_OVL_COLOR_GRAY, EMU_OVL_FONT_TINY);
+						 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
 		}
 	}
 
-	const char* hints[] = {"LEFT/RIGHT", "CHANGE", "B", "BACK"};
-	draw_footer_hints(ovl, hints, 4);
+	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Back"};
+	draw_footer_hints(ovl, hints, 6);
 }
 
 static void render_cheats(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 	draw_menu_bar(ovl, "Cheats");
+	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int count = ovl->cheat_cb.get_count ? ovl->cheat_cb.get_count() : 0;
 
 	if (count == 0) {
 		draw_centered_text(r, "No cheats available", ovl->screen_w / 2,
-						   ovl->screen_h / 2, EMU_OVL_COLOR_GRAY, EMU_OVL_FONT_SMALL);
-		const char* hints[] = {"B", "BACK"};
+						   ovl->screen_h / 2, EMU_OVL_COLOR_HINT, EMU_OVL_FONT_SMALL);
+		const char* hints[] = {"B", "Back"};
 		draw_footer_hints(ovl, hints, 2);
 		return;
 	}
@@ -1138,8 +1101,8 @@ static void render_cheats(EmuOvl* ovl) {
 	int row_h = S(PILL_SIZE);
 	int items_per_page = ovl->items_per_page;
 	int list_y = calc_centered_list_y(ovl, items_per_page);
-	int content_x = PADDING_PX;
-	int content_w = ovl->screen_w - PADDING_PX * 2;
+	int x = content_x();
+	int w = content_w(ovl);
 
 	// Scroll
 	ensure_scroll(ovl, count);
@@ -1158,7 +1121,7 @@ static void render_cheats(EmuOvl* ovl) {
 
 		const char* name = ovl->cheat_cb.get_name ? ovl->cheat_cb.get_name(idx) : "???";
 		const char* val = ovl->cheat_cb.get_value_label ? ovl->cheat_cb.get_value_label(idx) : "OFF";
-		draw_settings_row(ovl, content_x, iy, content_w, row_h,
+		draw_settings_row(ovl, x, iy, w, row_h,
 						  name, val, sel, true, EMU_OVL_FONT_SMALL);
 	}
 
@@ -1169,11 +1132,11 @@ static void render_cheats(EmuOvl* ovl) {
 	if (desc && desc[0] != '\0') {
 		int tw = r->text_width(desc, EMU_OVL_FONT_TINY);
 		r->draw_text(desc, (ovl->screen_w - tw) / 2, desc_cy,
-					 EMU_OVL_COLOR_GRAY, EMU_OVL_FONT_TINY);
+					 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
 	}
 
-	const char* hints[] = {"LEFT/RIGHT", "CHANGE", "B", "BACK"};
-	draw_footer_hints(ovl, hints, 4);
+	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Back"};
+	draw_footer_hints(ovl, hints, 6);
 }
 
 static const char* scope_label(EmuConfigScope scope) {
@@ -1189,32 +1152,31 @@ static void render_save_changes(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
 	draw_menu_bar(ovl, "Save Changes");
+	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	// Scope indicator below the title
 	const char* desc = scope_label(ovl->scope);
-	int desc_tw = r->text_width(desc, EMU_OVL_FONT_TINY);
-	int title_pill_h = S(PILL_SIZE);
-	int desc_y = PADDING_PX + title_pill_h + S(2);
-	r->draw_text(desc, PADDING_PX + S(BUTTON_PADDING), desc_y,
-				 EMU_OVL_COLOR_GRAY, EMU_OVL_FONT_TINY);
+	int desc_y = content_top() + S(12);
+	r->draw_text(desc, content_x() + S(BUTTON_PADDING), desc_y,
+				 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
 
 	// 3 rows: Save for Console, Save for Game, Restore Defaults
 	static const char* items[] = {
 		"Save for Console", "Save for Game", "Restore Defaults"
 	};
 	int row_h = S(PILL_SIZE);
-	int content_x = PADDING_PX;
-	int content_w = ovl->screen_w - PADDING_PX * 2;
+	int x = content_x();
+	int w = content_w(ovl);
 	int list_y = calc_centered_list_y(ovl, 3);
 
 	for (int i = 0; i < 3; i++) {
 		int iy = list_y + i * row_h;
 		bool sel = (i == ovl->selected);
-		draw_settings_row(ovl, content_x, iy, content_w, row_h,
+		draw_settings_row(ovl, x, iy, w, row_h,
 						  items[i], NULL, sel, false, EMU_OVL_FONT_LARGE);
 	}
 
-	const char* hints[] = {"B", "BACK", "A", "OKAY"};
+	const char* hints[] = {"B", "Back", "A", "Save"};
 	draw_footer_hints(ovl, hints, 4);
 }
 
@@ -1227,7 +1189,7 @@ void emu_ovl_render(EmuOvl* ovl) {
 		return;
 
 	r->begin_frame();
-	r->draw_captured_frame(0.55f);
+	r->draw_captured_frame(0.42f);
 
 	switch (ovl->state) {
 	case EMU_OVL_STATE_MAIN_MENU:
