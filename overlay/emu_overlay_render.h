@@ -10,6 +10,14 @@
 #define EMU_OVL_FONT_TINY 3
 #define EMU_OVL_FONT_COUNT 4
 
+// Relative font-tier sizes (the LARGE tier is the reference). When the active
+// theme stylesheet supplies ui_font.size, the SDL backend uses it as the LARGE
+// size and derives the smaller tiers from these ratios.
+#define EMU_OVL_FONT_TIER_LARGE 16
+#define EMU_OVL_FONT_TIER_MEDIUM 14
+#define EMU_OVL_FONT_TIER_SMALL 12
+#define EMU_OVL_FONT_TIER_TINY 10
+
 // Fallback colors (ARGB). Runtime colors come from Leaf/Jawaka CAT_* theme env.
 #define EMU_OVL_COLOR_WHITE 0xFFFFFFFF
 #define EMU_OVL_COLOR_GRAY 0xFF8F7F7F
@@ -57,5 +65,11 @@ typedef struct EmuOvlRenderBackend {
 	// Save captured frame as BMP
 	int (*save_captured_frame)(const char* path);
 } EmuOvlRenderBackend;
+
+// Returns the LARGE-tier font pixel size from the active Jawaka/Catastrophe
+// theme stylesheet (ui.ui_font.size), or `fallback` when no stylesheet is
+// available (e.g. the NextUI/MinUI launch path). The SDL backend uses this to
+// match the launcher's font metrics; smaller tiers are derived proportionally.
+int emu_ovl_stylesheet_font_size(int fallback);
 
 #endif

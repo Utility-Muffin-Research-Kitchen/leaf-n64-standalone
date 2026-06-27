@@ -566,9 +566,9 @@ static int ovl_sdl_init(int screen_w, int screen_h) {
 				s_overlayViewportW, s_overlayViewportH);
 	}
 
-	// Scale factor: match NextUI's FIXED_SCALE
-	// Brick (1024x768) = 3x, Smart Pro / TG5050 (1280x720) = 2x
-	if (screen_w <= 1024)
+	// Scale factor: only the Brick (1024x768) is tall enough for 3x; 720p-class
+	// screens (MLP1 960x720, Smart Pro / TG5050 1280x720) use 2x.
+	if (screen_w <= 1024 && screen_h >= 768)
 		s_scale = 3;
 	else
 		s_scale = 2;
@@ -593,8 +593,16 @@ static int ovl_sdl_init(int screen_w, int screen_h) {
 		return -1;
 	}
 
+	// Match the launcher's font metrics: when the active Jawaka/Catastrophe
+	// stylesheet supplies ui_font.size, use it as the LARGE tier and derive the
+	// smaller tiers from the 16:14:12:10 ratios. Otherwise fall back to the
+	// scale-based tiers (NextUI/MinUI launch path, no stylesheet).
+	int large = emu_ovl_stylesheet_font_size(FONT_SIZE_LARGE);
 	int font_sizes[EMU_OVL_FONT_COUNT] = {
-		FONT_SIZE_LARGE, FONT_SIZE_MEDIUM, FONT_SIZE_SMALL, FONT_SIZE_TINY};
+		large,
+		large * EMU_OVL_FONT_TIER_MEDIUM / EMU_OVL_FONT_TIER_LARGE,
+		large * EMU_OVL_FONT_TIER_SMALL / EMU_OVL_FONT_TIER_LARGE,
+		large * EMU_OVL_FONT_TIER_TINY / EMU_OVL_FONT_TIER_LARGE};
 	const char* bump_env = getenv("CAT_FONT_BUMP");
 	if (bump_env && bump_env[0] != '\0') {
 		char* end = NULL;

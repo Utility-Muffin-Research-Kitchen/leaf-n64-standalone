@@ -1,9 +1,12 @@
 #include "emu_overlay.h"
 #include "emu_overlay_icons.h"
 #include "emu_frontend.h"
+#include "cjson/cJSON.h"
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 // Layout constants (pre-scaled), tuned to Jawaka's RetroArch in-game menu.
@@ -106,10 +109,71 @@ static float parse_theme_float(const char* value, float fallback,
 	return parsed;
 }
 
+// ---------------------------------------------------------------------------
+// Jawaka / Catastrophe theme stylesheet
+//
+// The launcher's in-game menu is rendered by Catastrophe from the active theme's
+// stylesheet.json. This overlay is a separate renderer, so we read the same
+// stylesheet to keep the two visually in sync. Resolved from
+// $CAT_THEMES_DIR/$CAT_THEME_NAME/stylesheet.json (both set by Leaf's env.sh).
+// Absent on the NextUI/MinUI launch path, where we fall back to the env/defaults.
+// ---------------------------------------------------------------------------
+
+static bool stylesheet_path(char* buf, size_t n) {
+	const char* dir = getenv("CAT_THEMES_DIR");
+	const char* name = getenv("CAT_THEME_NAME");
+	if (!dir || !dir[0] || !name || !name[0])
+		return false;
+	int written = snprintf(buf, n, "%s/%s/stylesheet.json", dir, name);
+	return written > 0 && (size_t)written < n;
+}
+
+static char* read_file_alloc(const char* path) {
+	FILE* f = fopen(path, "rb");
+	if (!f)
+		return NULL;
+	char* buf = NULL;
+	if (fseek(f, 0, SEEK_END) == 0) {
+		long size = ftell(f);
+		if (size >= 0 && size <= (1 << 20)) {
+			rewind(f);
+			buf = (char*)malloc((size_t)size + 1);
+			if (buf) {
+				size_t got = fread(buf, 1, (size_t)size, f);
+				buf[got] = '\0';
+			}
+		}
+	}
+	fclose(f);
+	return buf;
+}
+
+// Parse the active stylesheet. Caller must cJSON_Delete the result (or NULL).
+static cJSON* stylesheet_load(void) {
+	char path[1024];
+	if (!stylesheet_path(path, sizeof(path)))
+		return NULL;
+	char* text = read_file_alloc(path);
+	if (!text)
+		return NULL;
+	cJSON* root = cJSON_Parse(text);
+	free(text);
+	return root;
+}
+
+// Read a "#RRGGBB"/"#RRGGBBAA" color field from a cJSON object into *out.
+// Returns true only when the field exists and parses.
+static bool json_color(const cJSON* obj, const char* key, uint32_t* out) {
+	if (!obj)
+		return false;
+	const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+	if (!cJSON_IsString(item) || !item->valuestring)
+		return false;
+	return parse_theme_color(item->valuestring, out);
+}
+
 static void load_theme(EmuOvl* ovl) {
 	EmuOvlTheme theme;
-	theme.panel = EMU_OVL_COLOR_PANEL;
-	theme.panel_strong = EMU_OVL_COLOR_PANEL_STRONG;
 	theme.text = EMU_OVL_COLOR_TEXT;
 	theme.hint = EMU_OVL_COLOR_HINT;
 	theme.highlight = EMU_OVL_COLOR_HIGHLIGHT;
@@ -121,6 +185,33 @@ static void load_theme(EmuOvl* ovl) {
 	theme.show_hints = true;
 
 	uint32_t background = 0xFF0F160Eu;
+
+	// 1) Active Jawaka/Catastrophe stylesheet — primary source of truth.
+	bool have_highlighted_text = false;
+	bool have_button_glyph_bg = false;
+	bool have_button_label = false;
+	cJSON* ss = stylesheet_load();
+	if (ss) {
+		const cJSON* ui = cJSON_GetObjectItemCaseSensitive(ss, "ui");
+		json_color(ui, "background_color", &background);
+		json_color(ui, "text_color", &theme.text);
+		json_color(ui, "highlight_color", &theme.highlight);
+		if (!json_color(ui, "hint_color", &theme.hint))
+			json_color(ui, "disabled_color", &theme.hint);
+		have_highlighted_text =
+			json_color(ui, "highlight_text_color", &theme.highlighted_text);
+		const cJSON* radius =
+			ui ? cJSON_GetObjectItemCaseSensitive(ui, "pill_radius_ratio") : NULL;
+		if (cJSON_IsNumber(radius))
+			theme.pill_radius_ratio = (float)radius->valuedouble;
+
+		const cJSON* bh = cJSON_GetObjectItemCaseSensitive(ss, "button_hints");
+		have_button_glyph_bg = json_color(bh, "glyph_bg_color", &theme.button_glyph_bg);
+		have_button_label = json_color(bh, "button_text_color", &theme.button_label);
+		cJSON_Delete(ss);
+	}
+
+	// 2) CAT_COLOR_* env overrides for the base colors (win over the stylesheet).
 	uint32_t parsed = 0;
 	if (parse_theme_color(getenv("CAT_COLOR_BACKGROUND"), &parsed))
 		background = parsed;
@@ -133,12 +224,21 @@ static void load_theme(EmuOvl* ovl) {
 	else if (parse_theme_color(getenv("CAT_COLOR_ACCENT"), &parsed))
 		theme.highlight = parsed;
 
+	// 3) Derive panel + dependent colors from the resolved base colors. Only
+	//    derive a dependent color when neither the stylesheet nor an explicit
+	//    env var supplied it.
+	theme.background = background;
 	theme.panel = color_with_alpha(background, 200);
 	theme.panel_strong = color_with_alpha(background, 230);
-	theme.highlighted_text = derive_highlighted_text(background, theme.text, theme.highlight);
-	theme.button_glyph_bg = theme.highlight;
-	theme.button_label = theme.highlighted_text;
+	if (!have_highlighted_text)
+		theme.highlighted_text =
+			derive_highlighted_text(background, theme.text, theme.highlight);
+	if (!have_button_glyph_bg)
+		theme.button_glyph_bg = theme.highlight;
+	if (!have_button_label)
+		theme.button_label = theme.highlighted_text;
 
+	// 4) Remaining CAT_COLOR_* overrides (highest priority).
 	if (parse_theme_color(getenv("CAT_COLOR_BUTTON_GLYPH_BG"), &parsed))
 		theme.button_glyph_bg = parsed;
 	if (parse_theme_color(getenv("CAT_COLOR_BUTTON_LABEL"), &parsed))
@@ -147,9 +247,25 @@ static void load_theme(EmuOvl* ovl) {
 		theme.highlighted_text = parsed;
 
 	theme.show_hints = parse_theme_bool(getenv("CAT_SHOW_HINTS"), true);
-	theme.pill_radius_ratio = parse_theme_float(getenv("CAT_PILL_RADIUS_RATIO"), 1.0f, 0.0f, 1.0f);
+	theme.pill_radius_ratio = parse_theme_float(getenv("CAT_PILL_RADIUS_RATIO"),
+												theme.pill_radius_ratio, 0.0f, 1.0f);
 
 	ovl->theme = theme;
+}
+
+// Exposed for the SDL backend (declared in emu_overlay_render.h).
+int emu_ovl_stylesheet_font_size(int fallback) {
+	cJSON* ss = stylesheet_load();
+	if (!ss)
+		return fallback;
+	int size = fallback;
+	const cJSON* ui = cJSON_GetObjectItemCaseSensitive(ss, "ui");
+	const cJSON* font = ui ? cJSON_GetObjectItemCaseSensitive(ui, "ui_font") : NULL;
+	const cJSON* sz = font ? cJSON_GetObjectItemCaseSensitive(font, "size") : NULL;
+	if (cJSON_IsNumber(sz) && sz->valuedouble > 0)
+		size = (int)sz->valuedouble;
+	cJSON_Delete(ss);
+	return size;
 }
 
 static void build_main_menu(EmuOvl* ovl) {
@@ -381,21 +497,30 @@ int emu_ovl_init(EmuOvl* ovl, EmuOvlConfig* cfg, EmuOvlRenderBackend* render,
 	if (game_name)
 		snprintf(ovl->game_name, sizeof(ovl->game_name), "%s", game_name);
 
-	// Keep upstream's per-resolution scale factors, but draw with Jawaka's
-	// in-game menu spacing and palette.
-	if (screen_w <= 1024) {
+	// Console display name shown under the game title (Catastrophe IGM parity).
+	const char* console = getenv("EMU_OVERLAY_CONSOLE");
+	snprintf(ovl->console_name, sizeof(ovl->console_name), "%s",
+			 (console && console[0]) ? console : "Nintendo 64");
+
+	// Per-resolution layout scale + page size. Only the Brick (1024x768) is tall
+	// enough for 3x; the 720p-class screens (MLP1 960x720, Smart Pro / TG5050
+	// 1280x720) use 2x so the header and rows fit without overlapping.
+	if (screen_w <= 1024 && screen_h >= 768) {
+		// Brick 1024x768
 		ovl_scale = 3;
 		ovl_padding = 5;
-	} else {
+		ovl->items_per_page = 5;
+	} else if (screen_w <= 1024) {
+		// MLP1 960x720 — 720p height, narrow width
 		ovl_scale = 2;
 		ovl_padding = 10;
-	}
-
-	// Items per page: Brick = 5, Smart Pro / TG5050 = 9
-	if (screen_w <= 1024)
-		ovl->items_per_page = 5;
-	else
+		ovl->items_per_page = 6;
+	} else {
+		// Smart Pro / TG5050 1280x720
+		ovl_scale = 2;
+		ovl_padding = 10;
 		ovl->items_per_page = 8;
+	}
 
 	build_main_menu(ovl);
 
@@ -756,7 +881,12 @@ static int calc_centered_list_y(EmuOvl* ovl, int item_count) {
 	int top = content_top() + S(12);
 	int bottom = content_bottom(ovl) - S(10);
 	int total_h = item_count * S(PILL_SIZE);
-	return top + (bottom - top - total_h) / 2;
+	int y = top + (bottom - top - total_h) / 2;
+	// Never start above the content area — otherwise a list taller than the
+	// available space centers upward and overlaps the header.
+	if (y < top)
+		y = top;
+	return y;
 }
 
 // Strip ROM metadata from a game name: drop anything from the first " (" or
@@ -790,11 +920,161 @@ static void shorten_title(EmuOvlRenderBackend* r, const char* in, char* out,
 	}
 }
 
-// Draw the title like Jawaka's in-game header: themed text over a soft panel.
-static void draw_menu_bar(EmuOvl* ovl, const char* title) {
+// ---------------------------------------------------------------------------
+// Status bar (wifi / battery / clock) — mirrors the Catastrophe IGM header.
+// Drawn with themed primitives so it tracks the active theme color; honors the
+// same CAT_STATUS_* env vars Leaf's env.sh sets for the launcher.
+// ---------------------------------------------------------------------------
+
+// Battery charge 0..100, or -1 if no power-supply node is readable.
+static int read_battery_percent(void) {
+	DIR* d = opendir("/sys/class/power_supply");
+	if (!d)
+		return -1;
+	int pct = -1;
+	struct dirent* e;
+	while ((e = readdir(d)) != NULL) {
+		if (e->d_name[0] == '.')
+			continue;
+		char path[300];
+		snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity", e->d_name);
+		FILE* f = fopen(path, "r");
+		if (!f)
+			continue;
+		int v;
+		int ok = fscanf(f, "%d", &v);
+		fclose(f);
+		if (ok == 1) {
+			pct = v < 0 ? 0 : (v > 100 ? 100 : v);
+			break;
+		}
+	}
+	closedir(d);
+	return pct;
+}
+
+// Wifi signal strength 0..3, or -1 if /proc/net/wireless has no entry.
+static int read_wifi_strength(void) {
+	FILE* f = fopen("/proc/net/wireless", "r");
+	if (!f)
+		return -1;
+	char line[256];
+	int strength = -1;
+	// Skip the two header lines.
+	if (fgets(line, sizeof(line), f) && fgets(line, sizeof(line), f)) {
+		while (fgets(line, sizeof(line), f) != NULL) {
+			char iface[32];
+			int status;
+			float link;
+			if (sscanf(line, " %31[^:]: %d %f", iface, &status, &link) >= 3) {
+				int q = (int)link; // typically 0..70
+				if (q <= 0)
+					strength = 0;
+				else if (q < 24)
+					strength = 1;
+				else if (q < 47)
+					strength = 2;
+				else
+					strength = 3;
+				break;
+			}
+		}
+	}
+	fclose(f);
+	return strength;
+}
+
+// Draw an outlined battery glyph whose right edge is at `right`, returning width.
+static int draw_status_battery(EmuOvl* ovl, int right, int cy) {
+	EmuOvlRenderBackend* r = ovl->render;
+	int bw = S(22), bh = S(12), nub_w = S(2), nub_h = S(6), border = S(2);
+	int total_w = bw + nub_w;
+	int x = right - total_w;
+	int y = cy - bh / 2;
+	uint32_t fg = ovl->theme.text;
+
+	// Outline = filled body knocked out by the panel/background color.
+	r->draw_rounded_rect(x, y, bw, bh, S(2), fg);
+	r->draw_rounded_rect(x + border, y + border, bw - 2 * border, bh - 2 * border,
+						 S(1), ovl->theme.background);
+	r->draw_rect(x + bw, cy - nub_h / 2, nub_w, nub_h, fg);
+
+	int pct = read_battery_percent();
+	if (pct >= 0) {
+		int inner_x = x + border + S(1);
+		int inner_y = y + border + S(1);
+		int inner_w = bw - 2 * border - S(2);
+		int inner_h = bh - 2 * border - S(2);
+		int fill = inner_w * pct / 100;
+		if (fill < S(1) && pct > 0)
+			fill = S(1);
+		uint32_t fillc = (pct <= 15) ? 0xFFE05050u : fg; // low charge → red
+		if (fill > 0)
+			r->draw_rect(inner_x, inner_y, fill, inner_h, fillc);
+	}
+	return total_w;
+}
+
+// Draw 3 ascending wifi bars whose right edge is at `right`, returning width.
+static int draw_status_wifi(EmuOvl* ovl, int right, int cy) {
+	EmuOvlRenderBackend* r = ovl->render;
+	const int bars = 3;
+	int bw = S(3), gap = S(2), maxh = S(12);
+	int total_w = bars * bw + (bars - 1) * gap;
+	int x = right - total_w;
+	int base_y = cy + maxh / 2;
+	int strength = read_wifi_strength();
+	for (int i = 0; i < bars; i++) {
+		int h = maxh * (i + 1) / bars;
+		uint32_t c = (strength > i) ? ovl->theme.text
+								    : color_with_alpha(ovl->theme.hint, 90);
+		r->draw_rect(x + i * (bw + gap), base_y - h, bw, h, c);
+	}
+	return total_w;
+}
+
+// Draw the status cluster right-aligned, vertically centered on `center_y`.
+static void draw_status_bar(EmuOvl* ovl, int center_y) {
+	EmuOvlRenderBackend* r = ovl->render;
+	int x = ovl->screen_w - PADDING_PX - content_margin();
+	int gap = S(10);
+
+	// Clock (rightmost).
+	const char* clock = getenv("CAT_STATUS_CLOCK");
+	bool show_clock = !clock || (strcmp(clock, "0") != 0 && strcmp(clock, "off") != 0);
+	if (show_clock) {
+		bool h12 = clock && strcmp(clock, "12") == 0;
+		time_t t = time(NULL);
+		struct tm tmv;
+		localtime_r(&t, &tmv);
+		char buf[16];
+		strftime(buf, sizeof(buf), h12 ? "%I:%M" : "%H:%M", &tmv);
+		int tw = r->text_width(buf, EMU_OVL_FONT_SMALL);
+		int th = r->text_height(EMU_OVL_FONT_SMALL);
+		r->draw_text(buf, x - tw, center_y - th / 2, ovl->theme.text, EMU_OVL_FONT_SMALL);
+		x -= tw + gap;
+	}
+
+	if (parse_theme_bool(getenv("CAT_STATUS_SHOW_BATTERY"), true)) {
+		int w = draw_status_battery(ovl, x, center_y);
+		x -= w + gap;
+	}
+
+	if (parse_theme_bool(getenv("CAT_STATUS_SHOW_WIFI"), true)) {
+		int w = draw_status_wifi(ovl, x, center_y);
+		x -= w + gap;
+	}
+}
+
+// Draw the title like Jawaka's in-game header: themed text over a soft panel,
+// with an optional console subtitle and the status cluster on the right.
+static void draw_menu_bar(EmuOvl* ovl, const char* title, const char* subtitle) {
 	EmuOvlRenderBackend* r = ovl->render;
 	int pad = content_margin();
 	int title_h = r->text_height(EMU_OVL_FONT_LARGE);
+	int sub_h = subtitle ? r->text_height(EMU_OVL_FONT_SMALL) : 0;
+	int sub_gap = subtitle ? S(2) : 0;
+	int top_pad = S(10);
 
 	// Available inner width = screen - side padding - pill internal padding
 	int max_inner_w = ovl->screen_w - PADDING_PX * 2 - pad * 2;
@@ -802,10 +1082,16 @@ static void draw_menu_bar(EmuOvl* ovl, const char* title) {
 	shorten_title(r, title, display, sizeof(display), max_inner_w);
 
 	int panel_y = PADDING_PX + S(4);
-	int panel_h = title_h + S(20);
+	int panel_h = top_pad * 2 + title_h + sub_gap + sub_h;
 	draw_content_panel(ovl, panel_y, panel_y + panel_h);
-	r->draw_text(display, content_x(), panel_y + (panel_h - title_h) / 2,
-				 ovl->theme.text, EMU_OVL_FONT_LARGE);
+
+	int title_y = panel_y + top_pad;
+	r->draw_text(display, content_x(), title_y, ovl->theme.text, EMU_OVL_FONT_LARGE);
+	if (subtitle && subtitle[0])
+		r->draw_text(subtitle, content_x(), title_y + title_h + sub_gap,
+					 ovl->theme.hint, EMU_OVL_FONT_SMALL);
+
+	draw_status_bar(ovl, title_y + title_h / 2);
 }
 
 // Map a button name to its icon handle, or -1 if no icon loaded
@@ -1002,7 +1288,7 @@ static void draw_centered_text(EmuOvlRenderBackend* r, const char* text, int cx,
 static void render_main_menu(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
-	draw_menu_bar(ovl, ovl->game_name);
+	draw_menu_bar(ovl, ovl->game_name, ovl->console_name);
 	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
@@ -1066,7 +1352,7 @@ static void render_main_menu(EmuOvl* ovl) {
 static void render_section_list(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
-	draw_menu_bar(ovl, "Options");
+	draw_menu_bar(ovl, "Options", NULL);
 	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
@@ -1117,7 +1403,7 @@ static void render_section_items(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 	EmuOvlSection* sec = &ovl->config->sections[ovl->current_section];
 
-	draw_menu_bar(ovl, sec->name);
+	draw_menu_bar(ovl, sec->name, NULL);
 	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
@@ -1232,7 +1518,7 @@ static void render_section_items(EmuOvl* ovl) {
 
 static void render_cheats(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
-	draw_menu_bar(ovl, "Cheats");
+	draw_menu_bar(ovl, "Cheats", NULL);
 	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	int count = ovl->cheat_cb.get_count ? ovl->cheat_cb.get_count() : 0;
@@ -1298,7 +1584,7 @@ static const char* scope_label(EmuConfigScope scope) {
 static void render_save_changes(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
-	draw_menu_bar(ovl, "Save Changes");
+	draw_menu_bar(ovl, "Save Changes", NULL);
 	draw_content_panel(ovl, content_top(), content_bottom(ovl));
 
 	// Scope indicator below the title

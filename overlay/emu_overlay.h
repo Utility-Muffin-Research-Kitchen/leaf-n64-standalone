@@ -53,6 +53,7 @@ typedef struct {
 } EmuOvlMainItem;
 
 typedef struct {
+	uint32_t background;
 	uint32_t panel;
 	uint32_t panel_strong;
 	uint32_t text;
@@ -100,6 +101,7 @@ typedef struct {
 	unsigned int bind_capture_start; // SDL_GetTicks() when capture began
 
 	char game_name[256];
+	char console_name[64]; // header subtitle, e.g. "Nintendo 64"
 	int screen_w;
 	int screen_h;
 	EmuOvlTheme theme;
