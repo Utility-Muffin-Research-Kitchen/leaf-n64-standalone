@@ -656,7 +656,7 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 
 	// ----- SAVE CHANGES submenu -----
 	case EMU_OVL_STATE_SAVE_CHANGES: {
-		// 3 items: Save for Console, Save for Game, Restore Defaults
+		// 3 items: Save for N64, Save for This Game, Restore Defaults
 		int count = 3;
 		if (input->up) {
 			ovl->selected = (ovl->selected - 1 + count) % count;
@@ -1288,9 +1288,9 @@ static void render_cheats(EmuOvl* ovl) {
 
 static const char* scope_label(EmuConfigScope scope) {
 	switch (scope) {
-	case EMU_SCOPE_NONE:    return "Using defaults.";
-	case EMU_SCOPE_CONSOLE: return "Using console config.";
-	case EMU_SCOPE_GAME:    return "Using game config.";
+	case EMU_SCOPE_NONE:    return "Using N64 defaults.";
+	case EMU_SCOPE_CONSOLE: return "Using N64 settings.";
+	case EMU_SCOPE_GAME:    return "Using this game's settings.";
 	}
 	return "";
 }
@@ -1307,9 +1307,9 @@ static void render_save_changes(EmuOvl* ovl) {
 	r->draw_text(desc, content_x() + S(BUTTON_PADDING), desc_y,
 				 ovl->theme.hint, EMU_OVL_FONT_TINY);
 
-	// 3 rows: Save for Console, Save for Game, Restore Defaults
+	// 3 rows: Save for N64, Save for This Game, Restore Defaults
 	static const char* items[] = {
-		"Save for Console", "Save for Game", "Restore Defaults"
+		"Save for N64", "Save for This Game", "Restore Defaults"
 	};
 	int row_h = S(PILL_SIZE);
 	int x = content_x();

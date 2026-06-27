@@ -228,9 +228,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index ff7e8a52..dc80b32a 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -147,6 +147,18 @@ set(GLideN64_SOURCES
-   uCodes/ZSortBOSS.cpp
- )
+@@ -149,2 +149,14 @@ set(GLideN64_SOURCES
  
 +# Emulator overlay menu sources (shared library)
 +set(OVERLAY_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../overlay")
@@ -245,30 +243,18 @@ index ff7e8a52..dc80b32a 100644
 +)
 +
  set(GLideNUI_SOURCES
-   GLideNUI/AboutDialog.cpp
-   GLideNUI/AboutDialog.ui
-@@ -235,7 +247,7 @@ if(EXISTS "${CMAKE_FIND_ROOT_PATH}/opt/vc/include/bcm_host.h" AND NOT MESA)
-     "${CMAKE_FIND_ROOT_PATH}/opt/vc/lib/GL"
-   )
+@@ -237,3 +249,3 @@ if(EXISTS "${CMAKE_FIND_ROOT_PATH}/opt/vc/include/bcm_host.h" AND NOT MESA)
  else(EXISTS "${CMAKE_FIND_ROOT_PATH}/opt/vc/include/bcm_host.h" AND NOT MESA)
 -  set(EGL_LIB -lEGL)
 +  set(EGL_LIB -ldl)
  endif(EXISTS "${CMAKE_FIND_ROOT_PATH}/opt/vc/include/bcm_host.h" AND NOT MESA)
- 
- if(MUPENPLUSAPI)
-@@ -244,6 +256,9 @@ if(MUPENPLUSAPI)
- 		-DTXFILTER_LIB
-   )
+@@ -246,2 +258,5 @@ if(MUPENPLUSAPI)
    include_directories( . inc )
 +  include_directories(${OVERLAY_COMMON_DIR})
 +  # SDL2 and SDL_ttf for overlay menu rendering
 +  include_directories(${SDL_TTF_INCLUDE_DIRS})
    set(GLideN64_SOURCES_UNIX
- 	MupenPlusPluginAPI.cpp
- 	mupenplus/CommonAPIImpl_mupenplus.cpp
-@@ -405,42 +420,45 @@ if(ANDROID)
- endif(ANDROID)
- 
+@@ -407,38 +422,41 @@ endif(ANDROID)
  if(NOT NO_OSD)
 -  if(ANDROID)
 -    set( FREETYPE_INCLUDE_DIRS "${ANDROID_LIB_PATH}/freetype/include" )
@@ -346,44 +332,28 @@ index ff7e8a52..dc80b32a 100644
 +    endif(ANDROID)
 +  endif(NOT FREETYPE_FOUND)
  
-   include_directories( ${FREETYPE_INCLUDE_DIRS} )
- else()
-@@ -559,6 +577,10 @@ if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" MATCH
-   set( CMAKE_SHARED_LINKER_FLAGS  "${CMAKE_SHARED_LINKER_FLAGS} ${GCC_STATIC_LINK_FLAGS}" )
- endif()
+@@ -561,2 +579,6 @@ endif()
  
 +# Use -Bsymbolic to prefer own statically-linked symbols (e.g. libpng)
 +# over symbols from other shared libraries loaded in the process
 +set( CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-Bsymbolic" )
 +
  set(CMAKE_CXX_STANDARD 17)
- set(CMAKE_CXX_STANDARD_REQUIRED YES)
- 
-@@ -628,6 +650,9 @@ else(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
-   endif(SDL)
- endif(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
+@@ -630,2 +652,5 @@ endif(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
  
 +# SDL2 + SDL_ttf for overlay menu rendering (needed regardless of SDL display mode)
 +target_link_libraries(${GLideN64_DLL_NAME} -lSDL2 -lSDL2_ttf)
 +
  if(UNIX AND NOT APPLE AND NOT ANDROID)
- 	install(TARGETS ${GLideN64_DLL_NAME}
- 		DESTINATION "${CMAKE_INSTALL_LIBDIR}/mupen64plus"
 diff --git a/src/DisplayLoadProgress.cpp b/src/DisplayLoadProgress.cpp
 index 647ca326..9a482c12 100644
 --- a/src/DisplayLoadProgress.cpp
 +++ b/src/DisplayLoadProgress.cpp
-@@ -1,6 +1,7 @@
- #include <stdarg.h>
- #include <string.h>
+@@ -3,2 +3,3 @@
  #include <cstdlib>
 +#include <string>
  #include "GLideNHQ/TxFilterExport.h"
- #include <Graphics/Context.h>
- #include <Graphics/Parameters.h>
-@@ -9,6 +10,17 @@
- #include "DisplayWindow.h"
- #include "DisplayLoadProgress.h"
+@@ -11,2 +12,13 @@
  
 +static const int MAX_LINES = 20;
 +static std::string s_lines[MAX_LINES];
@@ -397,11 +367,7 @@ index 647ca326..9a482c12 100644
 +}
 +
  void displayLoadProgress(const wchar_t *format, ...)
- {
- 	va_list args;
-@@ -34,14 +46,65 @@ void displayLoadProgress(const wchar_t *format, ...)
- 	// XXX: convert to multibyte
- 	wcstombs(buf, wbuf, INFO_BUF);
+@@ -36,2 +48,34 @@ void displayLoadProgress(const wchar_t *format, ...)
  
 +	// Strip trailing newline
 +	size_t len = strlen(buf);
@@ -436,10 +402,7 @@ index 647ca326..9a482c12 100644
 +
 +	// Render
  	FrameBuffer* pBuffer = frameBufferList().getCurrent();
- 	if (pBuffer != nullptr)
- 		gfxContext.bindFramebuffer(graphics::bufferTarget::DRAW_FRAMEBUFFER, graphics::ObjectHandle::defaultFramebuffer);
- 
- 	GraphicsDrawer & drawer = dwnd().getDrawer();
+@@ -42,4 +86,23 @@ void displayLoadProgress(const wchar_t *format, ...)
  	drawer.clearColorBuffer(nullptr);
 -	if (strlen(buf) > 0)
 -		drawer.drawText(buf, -0.9f, 0);
@@ -465,33 +428,23 @@ index 647ca326..9a482c12 100644
 +	}
 +
  	dwnd().swapBuffers();
- 
- 	if (pBuffer != nullptr)
 diff --git a/src/DisplayLoadProgress.h b/src/DisplayLoadProgress.h
 index 701d27d2..e6ad4c80 100644
 --- a/src/DisplayLoadProgress.h
 +++ b/src/DisplayLoadProgress.h
-@@ -2,5 +2,6 @@
- #define DISPLAYLOADPROGRESS_H
- 
+@@ -4,2 +4,3 @@
  void displayLoadProgress(const wchar_t *format, ...);
 +bool isLoadProgressActive();
  
- #endif // DISPLAYLOADPROGRESS_H
 diff --git a/src/DisplayWindow.cpp b/src/DisplayWindow.cpp
-index 59725f62..db07ea79 100644
+index 59725f62..1258e5c6 100644
 --- a/src/DisplayWindow.cpp
 +++ b/src/DisplayWindow.cpp
-@@ -1,5 +1,6 @@
- #include <assert.h>
+@@ -2,2 +2,3 @@
  #include <cstdlib>
 +#include <cstring>
  #include "Config.h"
- #include "RSP.h"
- #include "VI.h"
-@@ -8,6 +9,111 @@
- #include "PluginAPI.h"
- #include "FrameBuffer.h"
+@@ -10,2 +11,121 @@
  
 +#include <functional>
 +extern "C" {
@@ -524,13 +477,12 @@ index 59725f62..db07ea79 100644
 +};
 +}
 +
-+// ---------------------------------------------------------------------------
-+// emu_frontend plugin ops (all custom features now live in overlay/emu_frontend.c)
-+// ---------------------------------------------------------------------------
-+
-+// Present the current frame (plugin_ops.swap_buffers)
-+static void gliden64_swap_buffers(void) {
++static void gliden64_core_swap_buffers(void) {
 +	::CoreVideo_GL_SwapBuffers();
++}
++
++static void gliden64_swap_buffers(void) {
++	overlay_sdl_present_swap(gliden64_core_swap_buffers);
 +}
 +
 +// Return the overlay render backend (plugin_ops.get_render)
@@ -577,6 +529,21 @@ index 59725f62..db07ea79 100644
 +	}
 +}
 +
++typedef struct {
++	int w;
++	int h;
++} HudRenderCtx;
++
++static void gliden64_render_hud_on_gl_thread(void* data) {
++	HudRenderCtx* ctx = (HudRenderCtx*)data;
++	emu_frontend_render_hud(ctx->w, ctx->h);
++}
++
++static void gliden64_render_hud(int w, int h) {
++	HudRenderCtx ctx = { w, h };
++	gliden64_exec_on_video_thread(gliden64_render_hud_on_gl_thread, &ctx);
++}
++
 +static bool s_frontendInitialized = false;
 +
 +static void ensure_frontend_init()
@@ -599,11 +566,7 @@ index 59725f62..db07ea79 100644
 +}
 +
  bool DisplayWindow::start()
- {
- 	if (!_start())
-@@ -48,6 +154,14 @@ void DisplayWindow::swapBuffers()
- {
- 	m_drawer.drawOSD();
+@@ -50,2 +170,11 @@ void DisplayWindow::swapBuffers()
  	m_drawer.clearStatistics();
 +
 +	// All custom features (power, shortcuts, FF, rewind, cheats, overlay menu)
@@ -613,16 +576,110 @@ index 59725f62..db07ea79 100644
 +	if (!isLoadProgressActive())
 +		emu_frontend_frame(getScreenWidth(), getScreenHeight());
 +
++	gliden64_render_hud(getScreenWidth(), getScreenHeight());
  	_swapBuffers();
- 	if (!RSP.LLE) {
- 		if ((config.generalEmulation.hacks & hack_doNotResetOtherModeL) == 0)
+diff --git a/src/FrameBuffer.cpp b/src/FrameBuffer.cpp
+index 9d6ba513..76402ebf 100644
+--- a/src/FrameBuffer.cpp
++++ b/src/FrameBuffer.cpp
+@@ -3,2 +3,3 @@
+ #include <algorithm>
++#include <functional>
+ #include <vector>
+@@ -28,4 +29,9 @@
+ #include <Graphics/ColorBufferReader.h>
++#include "Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.h"
+ #include "DisplayWindow.h"
+ 
++extern "C" {
++#include "emu_overlay_sdl.h"
++}
++
+ using namespace std;
+@@ -33,2 +39,50 @@ using namespace graphics;
+ 
++namespace {
++class Gliden64PresenterCommand : public opengl::OpenGlCommand {
++public:
++	Gliden64PresenterCommand() : OpenGlCommand(true, false, "LeafPresenter", false) {}
++
++	static std::shared_ptr<opengl::OpenGlCommand> get(std::function<void()> callback) {
++		static int poolId = opengl::OpenGlCommandPool::get().getNextAvailablePool();
++		auto ptr = getFromPool<Gliden64PresenterCommand>(poolId);
++		ptr->m_callback = std::move(callback);
++		return ptr;
++	}
++
++	void commandToExecute() override {
++		m_callback();
++		m_callback = nullptr;
++	}
++
++private:
++	std::function<void()> m_callback;
++};
++
++static void gliden64_run_presenter_command(std::function<void()> callback)
++{
++	if (opengl::FunctionWrapper::isThreadedMode())
++		opengl::FunctionWrapper::executeOverlayCommand(
++			Gliden64PresenterCommand::get(std::move(callback))
++		);
++	else
++		callback();
++}
++}
++
++static void gliden64_bind_final_draw_target()
++{
++	DisplayWindow & wnd = dwnd();
++	const int screenWidth = (int)wnd.getScreenWidth();
++	const int screenHeight = (int)wnd.getScreenHeight();
++	bool presenterActive = false;
++	gliden64_run_presenter_command([screenWidth, screenHeight, &presenterActive]() {
++		overlay_sdl_present_init(screenWidth, screenHeight);
++		presenterActive = overlay_sdl_present_active() != 0;
++		if (presenterActive)
++			overlay_sdl_present_bind_target();
++	});
++	if (!presenterActive)
++		gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
++}
++
+ FrameBuffer::FrameBuffer()
+@@ -1095,3 +1149,3 @@ void FrameBufferList::_renderScreenSizeBuffer()
+ 
+-	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
++	gliden64_bind_final_draw_target();
+ 
+@@ -1122,3 +1176,6 @@ void FrameBufferList::_renderScreenSizeBuffer()
+ 
+-	drawer.blitOrCopyTexturedRect(blitParams);
++	if (overlay_sdl_present_active())
++		drawer.copyTexturedRect(blitParams);
++	else
++		drawer.blitOrCopyTexturedRect(blitParams);
+ 
+@@ -1403,3 +1460,3 @@ void FrameBufferList::OverscanBuffer::activate()
+ 	if (!m_enabled) {
+-		gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
++		gliden64_bind_final_draw_target();
+ 		return;
+@@ -1418,3 +1475,3 @@ void FrameBufferList::OverscanBuffer::draw(u32 _fullHeight, bool _PAL)
+ 
+-	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
++	gliden64_bind_final_draw_target();
+ #if defined(OS_WINDOWS)
+@@ -1479,3 +1536,3 @@ void FrameBufferList::renderBuffer()
+ 	if (!m_rdpUpdate.update(rdpRes)) {
+-		gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);
++		gliden64_bind_final_draw_target();
+ 		gfxContext.clearColorBuffer(0.0f, 0.0f, 0.0f, 0.0f);
 diff --git a/src/GLideNHQ/inc/png.h b/src/GLideNHQ/inc/png.h
 index 51ac8abe..83d39031 100644
 --- a/src/GLideNHQ/inc/png.h
 +++ b/src/GLideNHQ/inc/png.h
-@@ -1,68 +1,105 @@
- 
- /* png.h - header file for PNG reference library
+@@ -3,9 +3,10 @@
   *
 - * libpng version 1.6.32, August 24, 2017
 + * libpng version 1.6.43
@@ -638,8 +695,7 @@ index 51ac8abe..83d39031 100644
 - * This code is released under the libpng license (See LICENSE, below)
 + * This code is released under the libpng license. (See LICENSE, below.)
   *
-  * Authors and maintainers:
-  *   libpng versions 0.71, May 1995, through 0.88, January 1996: Guy Schalnat
+@@ -14,4 +15,6 @@
   *   libpng versions 0.89, June 1996, through 0.96, May 1997: Andreas Dilger
 - *   libpng versions 0.97, January 1998, through 1.6.32, August 24, 2017:
 - *     Glenn Randers-Pehrson.
@@ -648,8 +704,7 @@ index 51ac8abe..83d39031 100644
 + *   libpng versions 1.6.36, December 2018, through 1.6.43, February 2024:
 + *     Cosmin Truta
   *   See also "Contributing Authors", below.
-  */
- 
+@@ -20,11 +23,45 @@
  /*
 - * COPYRIGHT NOTICE, DISCLAIMER, and LICENSE:
 + * COPYRIGHT NOTICE, DISCLAIMER, and LICENSE
@@ -701,8 +756,7 @@ index 51ac8abe..83d39031 100644
 + * libpng versions 1.0.7, July 1, 2000, through 1.6.35, July 15, 2018 are
 + * Copyright (c) 2000-2002, 2004, 2006-2018 Glenn Randers-Pehrson, are
   * derived from libpng-1.0.6, and are distributed according to the same
-  * disclaimer and license as libpng-1.0.6 with the following individuals
-  * added to the list of Contributing Authors:
+@@ -33,11 +70,11 @@
   *
 - *    Simon-Pierre Cadieux
 - *    Eric S. Raymond
@@ -723,7 +777,7 @@ index 51ac8abe..83d39031 100644
 + *     Google Inc.
 + *     Vadim Barkov
   *
-  * and with the following additions to the disclaimer:
+@@ -45,11 +82,11 @@
   *
 - *    There is no warranty against interference with your enjoyment of the
 - *    library or against infringement.  There is no warranty that our
@@ -742,9 +796,7 @@ index 51ac8abe..83d39031 100644
 - * files that are distributed with libpng have other copyright owners and
 + * files that are distributed with libpng have other copyright owners, and
   * are released under other open source licenses.
-  *
-  * libpng versions 0.97, January 1998, through 1.0.6, March 20, 2000, are
-  * Copyright (c) 1998-2000 Glenn Randers-Pehrson, are derived from
+@@ -59,8 +96,8 @@
   * libpng-0.96, and are distributed according to the same disclaimer and
 - * license as libpng-0.96, with the following individuals added to the list
 - * of Contributing Authors:
@@ -758,11 +810,7 @@ index 51ac8abe..83d39031 100644
 + *     Glenn Randers-Pehrson
 + *     Willem van Schaik
   *
-  * libpng versions 0.89, June 1996, through 0.96, May 1997, are
-  * Copyright (c) 1996-1997 Andreas Dilger, are derived from libpng-0.88,
-@@ -70,14 +107,14 @@
-  * libpng-0.88, with the following individuals added to the list of
-  * Contributing Authors:
+@@ -72,10 +109,10 @@
   *
 - *    John Bowler
 - *    Kevin Bracey
@@ -780,11 +828,7 @@ index 51ac8abe..83d39031 100644
 - * Some files in the "scripts" directory have other copyright owners
 + * Some files in the "scripts" directory have other copyright owners,
   * but are released under this license.
-  *
-  * libpng versions 0.5, May 1995, through 0.88, January 1996, are
-@@ -86,62 +123,49 @@
-  * For the purposes of this copyright and license, "Contributing Authors"
-  * is defined as the following set of individuals:
+@@ -88,15 +125,16 @@
   *
 - *    Andreas Dilger
 - *    Dave Martindale
@@ -814,9 +858,7 @@ index 51ac8abe..83d39031 100644
 + * result from the use of the PNG Reference Library, even if advised of
 + * the possibility of such damage.
   *
-  * Permission is hereby granted to use, copy, modify, and distribute this
-  * source code, or portions hereof, for any purpose, without fee, subject
-  * to the following restrictions:
+@@ -106,15 +144,15 @@
   *
 - *   1. The origin of this source code must not be misrepresented.
 + *  1. The origin of this source code must not be misrepresented.
@@ -842,7 +884,7 @@ index 51ac8abe..83d39031 100644
 + * this source code in a product, acknowledgment is not required but would
 + * be appreciated.
   *
-  * END OF COPYRIGHT NOTICE, DISCLAIMER, and LICENSE.
+@@ -122,24 +160,10 @@
   *
 - * TRADEMARK:
 + * TRADEMARK
@@ -871,11 +913,7 @@ index 51ac8abe..83d39031 100644
 - * any encryption software.  See the EAR, paragraphs 734.3(b)(3) and
 - * 734.7(b).
   */
- 
- /*
-@@ -207,91 +231,33 @@
-  *    1.0.7rc1-2               1    10007  2.1.0.7rc1-2 (binary compatible)
-  *    1.0.7                    1    10007  (still compatible)
+@@ -209,19 +233,21 @@
   *    ...
 - *    1.0.19                  10    10019  10.so.0.19[.0]
 + *    1.0.69                  10    10069  10.so.0.69[.0]
@@ -911,9 +949,7 @@ index 51ac8abe..83d39031 100644
 + *    letter, until version 1.0.6j; from then on they were given the upcoming
 + *    public release number plus "betaNN" or "rcNN".
   *
-  *    Binary incompatibility exists only when applications make direct access
-  *    to the info_ptr or png_ptr members through png.h, and the compiled
-  *    application is loaded with a different version of the library.
+@@ -231,65 +257,5 @@
   *
 - *    DLLNUM will change each time there are forward or backward changes
 - *    in binary compatibility (e.g., when a new feature is added).
@@ -981,11 +1017,7 @@ index 51ac8abe..83d39031 100644
 + * is available as a W3C Recommendation and as an ISO/IEC Standard; see
 + * <https://www.w3.org/TR/2003/REC-PNG-20031110/>
   */
- 
- #ifndef PNG_H
-@@ -309,21 +275,22 @@
-  */
- 
+@@ -311,7 +277,9 @@
  /* Version information for png.h - this should match the version in png.c */
 -#define PNG_LIBPNG_VER_STRING "1.6.32"
 -#define PNG_HEADER_VERSION_STRING " libpng version 1.6.32 - August 24, 2017\n"
@@ -999,8 +1031,7 @@ index 51ac8abe..83d39031 100644
 +#define PNG_LIBPNG_VER_SONUM     PNG_LIBPNG_VER_SHAREDLIB /* [Deprecated] */
 +#define PNG_LIBPNG_VER_DLLNUM    PNG_LIBPNG_VER_SHAREDLIB /* [Deprecated] */
  
- /* These should match the first 3 components of PNG_LIBPNG_VER_STRING: */
- #define PNG_LIBPNG_VER_MAJOR   1
+@@ -320,8 +288,7 @@
  #define PNG_LIBPNG_VER_MINOR   6
 -#define PNG_LIBPNG_VER_RELEASE 32
 +#define PNG_LIBPNG_VER_RELEASE 43
@@ -1012,11 +1043,7 @@ index 51ac8abe..83d39031 100644
   */
 -
  #define PNG_LIBPNG_VER_BUILD  0
- 
- /* Release Status */
-@@ -343,13 +310,14 @@
- 
- #define PNG_LIBPNG_BUILD_BASE_TYPE PNG_LIBPNG_BUILD_STABLE
+@@ -345,9 +312,10 @@
  
 -/* Careful here.  At one time, Guy wanted to use 082, but that would be octal.
 - * We must not include leading zeros.
@@ -1033,76 +1060,44 @@ index 51ac8abe..83d39031 100644
 -#define PNG_LIBPNG_VER 10632 /* 1.6.32 */
 +#define PNG_LIBPNG_VER 10643 /* 1.6.43 */
  
- /* Library configuration: these options cannot be changed after
-  * the library has been built.
-@@ -459,7 +427,7 @@ extern "C" {
- /* This triggers a compiler error in png.c, if png.c and png.h
-  * do not agree upon the version number.
+@@ -461,3 +429,3 @@ extern "C" {
   */
 -typedef char* png_libpng_version_1_6_32;
 +typedef char* png_libpng_version_1_6_43;
  
- /* Basic control structions.  Read libpng-manual.txt or libpng.3 for more info.
-  *
-@@ -600,8 +568,8 @@ typedef struct png_text_struct
-    png_charp key;          /* keyword, 1-79 character description of "text" */
-    png_charp text;         /* comment, may be an empty string (ie "")
+@@ -602,4 +570,4 @@ typedef struct png_text_struct
                                or a NULL pointer */
 -   png_size_t text_length; /* length of the text string */
 -   png_size_t itxt_length; /* length of the itxt string */
 +   size_t text_length;     /* length of the text string */
 +   size_t itxt_length;     /* length of the itxt string */
     png_charp lang;         /* language code, 0-79 characters
-                               or a NULL pointer */
-    png_charp lang_key;     /* keyword translated UTF-8 string, 0 or more
-@@ -654,7 +622,7 @@ typedef struct png_unknown_chunk_t
- {
-    png_byte name[5]; /* Textual chunk name with '\0' terminator */
+@@ -656,3 +624,3 @@ typedef struct png_unknown_chunk_t
     png_byte *data;   /* Data, should not be modified on read! */
 -   png_size_t size;
 +   size_t size;
  
-    /* On write 'location' must be set using the flag values listed below.
-     * Notice that on read it is set by libpng however the values stored have
-@@ -679,7 +647,7 @@ typedef png_unknown_chunk * * png_unknown_chunkpp;
- /* Maximum positive integer used in PNG is (2^31)-1 */
- #define PNG_UINT_31_MAX ((png_uint_32)0x7fffffffL)
+@@ -681,3 +649,3 @@ typedef png_unknown_chunk * * png_unknown_chunkpp;
  #define PNG_UINT_32_MAX ((png_uint_32)(-1))
 -#define PNG_SIZE_MAX ((png_size_t)(-1))
 +#define PNG_SIZE_MAX ((size_t)(-1))
  
- /* These are constants for fixed point values encoded in the
-  * PNG specification manner (x100000)
-@@ -785,7 +753,7 @@ typedef png_unknown_chunk * * png_unknown_chunkpp;
- typedef struct png_row_info_struct
- {
+@@ -787,3 +755,3 @@ typedef struct png_row_info_struct
     png_uint_32 width;    /* width of row */
 -   png_size_t rowbytes;  /* number of bytes in row */
 +   size_t rowbytes;      /* number of bytes in row */
     png_byte color_type;  /* color type of row */
-    png_byte bit_depth;   /* bit depth of row */
-    png_byte channels;    /* number of channels (1, 2, 3, or 4) */
-@@ -804,7 +772,7 @@ typedef png_row_info * * png_row_infopp;
-  * expected to return the read data in the buffer.
-  */
+@@ -806,3 +774,3 @@ typedef png_row_info * * png_row_infopp;
  typedef PNG_CALLBACK(void, *png_error_ptr, (png_structp, png_const_charp));
 -typedef PNG_CALLBACK(void, *png_rw_ptr, (png_structp, png_bytep, png_size_t));
 +typedef PNG_CALLBACK(void, *png_rw_ptr, (png_structp, png_bytep, size_t));
  typedef PNG_CALLBACK(void, *png_flush_ptr, (png_structp));
- typedef PNG_CALLBACK(void, *png_read_status_ptr, (png_structp, png_uint_32,
-     int));
-@@ -880,7 +848,7 @@ PNG_FUNCTION(void, (PNGCAPI *png_longjmp_ptr), PNGARG((jmp_buf, int)), typedef);
- #define PNG_TRANSFORM_GRAY_TO_RGB   0x2000      /* read only */
- /* Added to libpng-1.5.4 */
+@@ -882,3 +850,3 @@ PNG_FUNCTION(void, (PNGCAPI *png_longjmp_ptr), PNGARG((jmp_buf, int)), typedef);
  #define PNG_TRANSFORM_EXPAND_16     0x4000      /* read only */
 -#if INT_MAX >= 0x8000 /* else this might break */
 +#if ~0U > 0xffffU /* or else this might break on a 16-bit machine */
  #define PNG_TRANSFORM_SCALE_16      0x8000      /* read only */
- #endif
- 
-@@ -939,15 +907,15 @@ PNG_EXPORT(2, void, png_set_sig_bytes, (png_structrp png_ptr, int num_bytes));
- /* Check sig[start] through sig[start + num_to_check - 1] to see if it's a
-  * PNG file.  Returns zero if the supplied bytes match the 8-byte PNG
+@@ -941,11 +909,11 @@ PNG_EXPORT(2, void, png_set_sig_bytes, (png_structrp png_ptr, int num_bytes));
   * signature, and non-zero otherwise.  Having num_to_check == 0 or
 - * start > 7 will always fail (ie return non-zero).
 + * start > 7 will always fail (i.e. return non-zero).
@@ -1119,124 +1114,72 @@ index 51ac8abe..83d39031 100644
 -#define png_check_sig(sig, n) !png_sig_cmp((sig), 0, (n))
 +#define png_check_sig(sig, n) (png_sig_cmp((sig), 0, (n)) == 0) /* DEPRECATED */
  
- /* Allocate and initialize png_ptr struct for reading, and any other memory. */
- PNG_EXPORTA(4, png_structp, png_create_read_struct,
-@@ -961,11 +929,11 @@ PNG_EXPORTA(5, png_structp, png_create_write_struct,
-     png_error_ptr warn_fn),
-     PNG_ALLOCATED);
+@@ -963,3 +931,3 @@ PNG_EXPORTA(5, png_structp, png_create_write_struct,
  
 -PNG_EXPORT(6, png_size_t, png_get_compression_buffer_size,
 +PNG_EXPORT(6, size_t, png_get_compression_buffer_size,
      (png_const_structrp png_ptr));
- 
+@@ -967,3 +935,3 @@ PNG_EXPORT(6, png_size_t, png_get_compression_buffer_size,
  PNG_EXPORT(7, void, png_set_compression_buffer_size, (png_structrp png_ptr,
 -    png_size_t size));
 +    size_t size));
  
- /* Moved from pngconf.h in 1.4.0 and modified to ensure setjmp/longjmp
-  * match up.
-@@ -1018,7 +986,7 @@ PNG_EXPORT(13, void, png_write_sig, (png_structrp png_ptr));
- 
- /* Write a PNG chunk - size, type, (optional) data, CRC. */
+@@ -1020,3 +988,3 @@ PNG_EXPORT(13, void, png_write_sig, (png_structrp png_ptr));
  PNG_EXPORT(14, void, png_write_chunk, (png_structrp png_ptr, png_const_bytep
 -    chunk_name, png_const_bytep data, png_size_t length));
 +    chunk_name, png_const_bytep data, size_t length));
  
- /* Write the start of a PNG chunk - length and chunk name. */
- PNG_EXPORT(15, void, png_write_chunk_start, (png_structrp png_ptr,
-@@ -1026,7 +994,7 @@ PNG_EXPORT(15, void, png_write_chunk_start, (png_structrp png_ptr,
- 
- /* Write the data of a PNG chunk started with png_write_chunk_start(). */
+@@ -1028,3 +996,3 @@ PNG_EXPORT(15, void, png_write_chunk_start, (png_structrp png_ptr,
  PNG_EXPORT(16, void, png_write_chunk_data, (png_structrp png_ptr,
 -    png_const_bytep data, png_size_t length));
 +    png_const_bytep data, size_t length));
  
- /* Finish a chunk started with png_write_chunk_start() (includes CRC). */
- PNG_EXPORT(17, void, png_write_chunk_end, (png_structrp png_ptr));
-@@ -1040,7 +1008,7 @@ PNG_EXPORTA(18, png_infop, png_create_info_struct, (png_const_structrp png_ptr),
-  * the API will be removed in the future.
-  */
+@@ -1042,3 +1010,3 @@ PNG_EXPORTA(18, png_infop, png_create_info_struct, (png_const_structrp png_ptr),
  PNG_EXPORTA(19, void, png_info_init_3, (png_infopp info_ptr,
 -    png_size_t png_info_struct_size), PNG_DEPRECATED);
 +    size_t png_info_struct_size), PNG_DEPRECATED);
  
- /* Writes all the PNG information before the image. */
- PNG_EXPORT(20, void, png_write_info_before_PLTE,
-@@ -1137,7 +1105,7 @@ PNG_EXPORT(35, void, png_build_grayscale_palette, (int bit_depth,
-  * corresponding composited pixel, and the color channels are unassociated
-  * (not premultiplied).  The gamma encoded color channels must be scaled
+@@ -1139,3 +1107,3 @@ PNG_EXPORT(35, void, png_build_grayscale_palette, (int bit_depth,
   * according to the contribution and to do this it is necessary to undo
 - * the encoding, scale the color values, perform the composition and reencode
 + * the encoding, scale the color values, perform the composition and re-encode
   * the values.  This is the 'PNG' mode.
-  *
-  * The alternative is to 'associate' the alpha with the color information by
-@@ -1193,7 +1161,7 @@ PNG_FIXED_EXPORT(228, void, png_set_alpha_mode_fixed, (png_structrp png_ptr,
-  *
-  * png_set_alpha_mode(pp, PNG_ALPHA_PNG, PNG_GAMMA_MAC);
+@@ -1195,3 +1163,3 @@ PNG_FIXED_EXPORT(228, void, png_set_alpha_mode_fixed, (png_structrp png_ptr,
   *    In this case the output is assumed to be something like an sRGB conformant
 - *    display preceeded by a power-law lookup table of power 1.45.  This is how
 + *    display preceded by a power-law lookup table of power 1.45.  This is how
   *    early Mac systems behaved.
-  *
-  * png_set_alpha_mode(pp, PNG_ALPHA_STANDARD, PNG_GAMMA_LINEAR);
-@@ -1240,7 +1208,7 @@ PNG_FIXED_EXPORT(228, void, png_set_alpha_mode_fixed, (png_structrp png_ptr,
-  *
-  * When the default gamma of PNG files doesn't match the output gamma.
+@@ -1242,3 +1210,3 @@ PNG_FIXED_EXPORT(228, void, png_set_alpha_mode_fixed, (png_structrp png_ptr,
   *    If you have PNG files with no gamma information png_set_alpha_mode allows
 - *    you to provide a default gamma, but it also sets the ouput gamma to the
 + *    you to provide a default gamma, but it also sets the output gamma to the
   *    matching value.  If you know your PNG files have a gamma that doesn't
-  *    match the output you can take advantage of the fact that
-  *    png_set_alpha_mode always sets the output gamma but only sets the PNG
-@@ -1477,7 +1445,7 @@ PNG_EXPORT(66, void, png_set_crc_action, (png_structrp png_ptr, int crit_action,
-  * mainly useful for testing, as the defaults should work with most users.
-  * Those users who are tight on memory or want faster performance at the
+@@ -1479,3 +1447,3 @@ PNG_EXPORT(66, void, png_set_crc_action, (png_structrp png_ptr, int crit_action,
   * expense of compression can modify them.  See the compression library
 - * header file (zlib.h) for an explination of the compression functions.
 + * header file (zlib.h) for an explanation of the compression functions.
   */
- 
- /* Set the filtering method(s) used by libpng.  Currently, the only valid
-@@ -1532,7 +1500,7 @@ PNG_FIXED_EXPORT(209, void, png_set_filter_heuristics_fixed,
-  * 0 - 9, corresponding directly to the zlib compression levels 0 - 9
-  * (0 - no compression, 9 - "maximal" compression).  Note that tests have
+@@ -1534,3 +1502,3 @@ PNG_FIXED_EXPORT(209, void, png_set_filter_heuristics_fixed,
   * shown that zlib compression levels 3-6 usually perform as well as level 9
 - * for PNG images, and do considerably fewer caclulations.  In the future,
 + * for PNG images, and do considerably fewer calculations.  In the future,
   * these values may not correspond directly to the zlib compression levels.
-  */
- #ifdef PNG_WRITE_CUSTOMIZE_COMPRESSION_SUPPORTED
-@@ -1691,7 +1659,7 @@ PNG_EXPORT(218, png_byte, png_get_current_pass_number, (png_const_structrp));
-  *           chunk will cause an error at this point unless it is to be saved.
-  * positive: The chunk was handled, libpng will ignore/discard it.
+@@ -1693,3 +1661,3 @@ PNG_EXPORT(218, png_byte, png_get_current_pass_number, (png_const_structrp));
   *
 - * See "INTERACTION WTIH USER CHUNK CALLBACKS" below for important notes about
 + * See "INTERACTION WITH USER CHUNK CALLBACKS" below for important notes about
   * how this behavior will change in libpng 1.7
-  */
- PNG_EXPORT(88, void, png_set_read_user_chunk_fn, (png_structrp png_ptr,
-@@ -1716,7 +1684,7 @@ PNG_EXPORT(91, png_voidp, png_get_progressive_ptr,
- 
- /* Function to be called when data becomes available */
+@@ -1718,3 +1686,3 @@ PNG_EXPORT(91, png_voidp, png_get_progressive_ptr,
  PNG_EXPORT(92, void, png_process_data, (png_structrp png_ptr,
 -    png_inforp info_ptr, png_bytep buffer, png_size_t buffer_size));
 +    png_inforp info_ptr, png_bytep buffer, size_t buffer_size));
  
- /* A function which may be called *only* within png_process_data to stop the
-  * processing of any more data.  The function returns the number of bytes
-@@ -1725,7 +1693,7 @@ PNG_EXPORT(92, void, png_process_data, (png_structrp png_ptr,
-  * 'save' is set to true the routine will first save all the pending data and
-  * will always return 0.
+@@ -1727,3 +1695,3 @@ PNG_EXPORT(92, void, png_process_data, (png_structrp png_ptr,
   */
 -PNG_EXPORT(219, png_size_t, png_process_data_pause, (png_structrp, int save));
 +PNG_EXPORT(219, size_t, png_process_data_pause, (png_structrp, int save));
  
- /* A function which may be called *only* outside (after) a call to
-  * png_process_data.  It returns the number of bytes of data to skip in the
-@@ -1761,12 +1729,9 @@ PNG_EXPORT(97, void, png_free, (png_const_structrp png_ptr, png_voidp ptr));
- PNG_EXPORT(98, void, png_free_data, (png_const_structrp png_ptr,
-     png_inforp info_ptr, png_uint_32 free_me, int num));
+@@ -1763,8 +1731,5 @@ PNG_EXPORT(98, void, png_free_data, (png_const_structrp png_ptr,
  
 -/* Reassign responsibility for freeing existing data, whether allocated
 +/* Reassign the responsibility for freeing existing data, whether allocated
@@ -1247,107 +1190,62 @@ index 51ac8abe..83d39031 100644
 - * may result either in memory leaks or double free of allocated data.
 + * in, without changing the state for other png_info structures.
   */
- PNG_EXPORT(99, void, png_data_freer, (png_const_structrp png_ptr,
-     png_inforp info_ptr, int freer, png_uint_32 mask));
-@@ -1870,7 +1835,7 @@ PNG_EXPORT(110, png_uint_32, png_get_valid, (png_const_structrp png_ptr,
-     png_const_inforp info_ptr, png_uint_32 flag));
- 
+@@ -1872,3 +1837,3 @@ PNG_EXPORT(110, png_uint_32, png_get_valid, (png_const_structrp png_ptr,
  /* Returns number of bytes needed to hold a transformed row. */
 -PNG_EXPORT(111, png_size_t, png_get_rowbytes, (png_const_structrp png_ptr,
 +PNG_EXPORT(111, size_t, png_get_rowbytes, (png_const_structrp png_ptr,
      png_const_inforp info_ptr));
- 
- #ifdef PNG_INFO_IMAGE_SUPPORTED
-@@ -2013,12 +1978,12 @@ PNG_FIXED_EXPORT(233, void, png_set_cHRM_XYZ_fixed, (png_const_structrp png_ptr,
- PNG_EXPORT(246, png_uint_32, png_get_eXIf, (png_const_structrp png_ptr,
-     png_inforp info_ptr, png_bytep *exif));
+@@ -2015,3 +1980,3 @@ PNG_EXPORT(246, png_uint_32, png_get_eXIf, (png_const_structrp png_ptr,
  PNG_EXPORT(247, void, png_set_eXIf, (png_const_structrp png_ptr,
 -    png_inforp info_ptr, const png_bytep exif));
 +    png_inforp info_ptr, png_bytep exif));
  
- PNG_EXPORT(248, png_uint_32, png_get_eXIf_1, (png_const_structrp png_ptr,
-     png_const_inforp info_ptr, png_uint_32 *num_exif, png_bytep *exif));
+@@ -2020,3 +1985,3 @@ PNG_EXPORT(248, png_uint_32, png_get_eXIf_1, (png_const_structrp png_ptr,
  PNG_EXPORT(249, void, png_set_eXIf_1, (png_const_structrp png_ptr,
 -    png_inforp info_ptr, const png_uint_32 num_exif, const png_bytep exif));
 +    png_inforp info_ptr, png_uint_32 num_exif, png_bytep exif));
  #endif
- 
- #ifdef PNG_gAMA_SUPPORTED
-@@ -2239,7 +2204,7 @@ PNG_EXPORT(171, void, png_set_sCAL_s, (png_const_structrp png_ptr,
-  * to specifying "NEVER", however when "AS_DEFAULT" is used for specific chunks
-  * it simply resets the behavior to the libpng default.
+@@ -2241,3 +2206,3 @@ PNG_EXPORT(171, void, png_set_sCAL_s, (png_const_structrp png_ptr,
   *
 - * INTERACTION WTIH USER CHUNK CALLBACKS:
 + * INTERACTION WITH USER CHUNK CALLBACKS:
   * The per-chunk handling is always used when there is a png_user_chunk_ptr
-  * callback and the callback returns 0; the chunk is then always stored *unless*
-  * it is critical and the per-chunk setting is other than ALWAYS.  Notice that
-@@ -2658,7 +2623,7 @@ PNG_EXPORT(243, int, png_get_palette_max, (png_const_structp png_ptr,
-  * The simplified API hides the details of both libpng and the PNG file format
-  * itself.  It allows PNG files to be read into a very limited number of
+@@ -2660,3 +2625,3 @@ PNG_EXPORT(243, int, png_get_palette_max, (png_const_structp png_ptr,
   * in-memory bitmap formats or to be written from the same formats.  If these
 - * formats do not accomodate your needs then you can, and should, use the more
 + * formats do not accommodate your needs then you can, and should, use the more
   * sophisticated APIs above - these support a wide variety of in-memory formats
-  * and a wide variety of sophisticated transformations to those formats as well
-  * as a wide variety of APIs to manipulate ancillary information.
-@@ -2764,7 +2729,7 @@ typedef struct
-  *
-  * When the simplified API needs to convert between sRGB and linear colorspaces,
+@@ -2766,3 +2731,3 @@ typedef struct
   * the actual sRGB transfer curve defined in the sRGB specification (see the
 - * article at https://en.wikipedia.org/wiki/SRGB) is used, not the gamma=1/2.2
 + * article at <https://en.wikipedia.org/wiki/SRGB>) is used, not the gamma=1/2.2
   * approximation used elsewhere in libpng.
-  *
-  * When an alpha channel is present it is expected to denote pixel coverage
-@@ -2819,6 +2784,8 @@ typedef struct
- #  define PNG_FORMAT_FLAG_AFIRST 0x20U /* alpha channel comes first */
- #endif
+@@ -2821,2 +2786,4 @@ typedef struct
  
 +#define PNG_FORMAT_FLAG_ASSOCIATED_ALPHA 0x40U /* alpha channel is associated */
 +
  /* Commonly used formats have predefined macros.
-  *
-  * First the single byte (sRGB) formats:
-@@ -2965,7 +2932,7 @@ typedef struct
-  * 'flags' field of png_image.
-  */
+@@ -2967,3 +2934,3 @@ typedef struct
  #define PNG_IMAGE_FLAG_COLORSPACE_NOT_sRGB 0x01
 -   /* This indicates the the RGB values of the in-memory bitmap do not
 +   /* This indicates that the RGB values of the in-memory bitmap do not
      * correspond to the red, green and blue end-points defined by sRGB.
-     */
- 
-@@ -3018,7 +2985,7 @@ PNG_EXPORT(235, int, png_image_begin_read_from_stdio, (png_imagep image,
- #endif /* STDIO */
- 
+@@ -3020,3 +2987,3 @@ PNG_EXPORT(235, int, png_image_begin_read_from_stdio, (png_imagep image,
  PNG_EXPORT(236, int, png_image_begin_read_from_memory, (png_imagep image,
 -   png_const_voidp memory, png_size_t size));
 +   png_const_voidp memory, size_t size));
     /* The PNG header is read from the given memory buffer. */
- 
- PNG_EXPORT(237, int, png_image_finish_read, (png_imagep image,
-@@ -3131,7 +3098,7 @@ PNG_EXPORT(245, int, png_image_write_to_memory, (png_imagep image, void *memory,
-     * than or equal to the original value.
-     *
+@@ -3133,3 +3100,3 @@ PNG_EXPORT(245, int, png_image_write_to_memory, (png_imagep image, void *memory,
      * If the function returns false and *memory_bytes was not changed an error
 -    * occured during write.  If *memory_bytes was changed, or is not 0 if
 +    * occurred during write.  If *memory_bytes was changed, or is not 0 if
      * 'memory' was NULL, the write would have succeeded but for the memory
-     * buffer being too small.  *memory_bytes contains the required number of
-     * bytes and will be bigger that the original value.
-@@ -3215,7 +3182,7 @@ PNG_EXPORT(245, int, png_image_write_to_memory, (png_imagep image, void *memory,
-  * option and 'onoff' is 0 (off) or non-0 (on).  The value returned is given
-  * by the PNG_OPTION_ defines below.
+@@ -3217,3 +3184,3 @@ PNG_EXPORT(245, int, png_image_write_to_memory, (png_imagep image, void *memory,
   *
 - * HARDWARE: normally hardware capabilites, such as the Intel SSE instructions,
 + * HARDWARE: normally hardware capabilities, such as the Intel SSE instructions,
   *           are detected at run time, however sometimes it may be impossible
-  *           to do this in user mode, in which case it is necessary to discover
-  *           the capabilities in an OS specific way.  Such capabilities are
-@@ -3236,11 +3203,18 @@ PNG_EXPORT(245, int, png_image_write_to_memory, (png_imagep image, void *memory,
- #ifdef PNG_MIPS_MSA_API_SUPPORTED
- #  define PNG_MIPS_MSA   6 /* HARDWARE: MIPS Msa SIMD instructions supported */
+@@ -3238,7 +3205,14 @@ PNG_EXPORT(245, int, png_image_write_to_memory, (png_imagep image, void *memory,
  #endif
 -#define PNG_IGNORE_ADLER32 8
 +#ifdef PNG_DISABLE_ADLER32_CHECK_SUPPORTED
@@ -1365,13 +1263,11 @@ index 51ac8abe..83d39031 100644
 +
 +#define PNG_OPTION_NEXT  14 /* Next option - numbers must be even */
  
- /* Return values: NOTE: there are four values and 'off' is *not* zero */
- #define PNG_OPTION_UNSET   0 /* Unset - defaults to off */
 diff --git a/src/GLideNHQ/inc/pngconf.h b/src/GLideNHQ/inc/pngconf.h
 index c0f15547..000d7b1a 100644
 --- a/src/GLideNHQ/inc/pngconf.h
 +++ b/src/GLideNHQ/inc/pngconf.h
-@@ -1,11 +1,12 @@
+@@ -1,9 +1,10 @@
  
 -/* pngconf.h - machine configurable file for libpng
 +/* pngconf.h - machine-configurable file for libpng
@@ -1387,11 +1283,7 @@ index c0f15547..000d7b1a 100644
 + * Copyright (c) 1996-1997 Andreas Dilger
 + * Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
   *
-  * This code is released under the libpng license.
-  * For conditions of distribution and use, see the disclaimer
-@@ -57,14 +58,13 @@
- 
- #endif /* PNG_BUILDING_SYMBOL_TABLE */
+@@ -59,5 +60,4 @@
  
 -/* Prior to 1.6.0 it was possible to turn off 'const' in declarations using
 - * PNG_NO_CONST; this is no longer supported except for data declarations which
@@ -1399,38 +1291,26 @@ index c0f15547..000d7b1a 100644
 +/* Prior to 1.6.0, it was possible to turn off 'const' in declarations,
 + * using PNG_NO_CONST.  This is no longer supported.
   */
- #define PNG_CONST const /* backward compatibility only */
+@@ -65,4 +65,4 @@
  
 -/* This controls optimization of the reading of 16-bit and 32-bit values
 - * from PNG files.  It can be set on a per-app-file basis - it
 +/* This controls optimization of the reading of 16-bit and 32-bit
 + * values from PNG files.  It can be set on a per-app-file basis: it
   * just changes whether a macro is used when the function is called.
-  * The library builder sets the default; if read functions are not
-  * built into the library the macro implementation is forced on.
-@@ -127,7 +127,7 @@
-  *
-  * These cases only differ if the operating system does not use the C
+@@ -129,3 +129,3 @@
   * calling convention, at present this just means the above cases
 - * (x86 DOS/Windows sytems) and, even then, this does not apply to
 + * (x86 DOS/Windows systems) and, even then, this does not apply to
   * Cygwin running on those systems.
-  *
-  * Note that the value must be defined in pnglibconf.h so that what
-@@ -180,8 +180,8 @@
-  * compiler-specific macros to the values required to change the calling
-  * conventions of the various functions.
+@@ -182,4 +182,4 @@
   */
 -#if defined(_Windows) || defined(_WINDOWS) || defined(WIN32) ||\
 -    defined(_WIN32) || defined(__WIN32__) || defined(__CYGWIN__)
 +#if defined(_WIN32) || defined(__WIN32__) || defined(__NT__) || \
 +    defined(__CYGWIN__)
    /* Windows system (DOS doesn't support DLLs).  Includes builds under Cygwin or
-    * MinGW on any architecture currently supported by Windows.  Also includes
-    * Watcom builds but these need special treatment because they are not
-@@ -515,8 +515,10 @@
- #  error "libpng requires an unsigned 32-bit (or more) type"
- #endif
+@@ -517,4 +517,6 @@
  
 -/* Prior to 1.6.0 it was possible to disable the use of size_t, 1.6.0, however,
 - * requires an ISOC90 compiler and relies on consistent behavior of sizeof.
@@ -1439,11 +1319,7 @@ index c0f15547..000d7b1a 100644
 + * behavior of sizeof and ptrdiff_t are required.
 + * The legacy typedefs are provided here for backwards compatibility.
   */
- typedef size_t png_size_t;
- typedef ptrdiff_t png_ptrdiff_t;
-@@ -537,13 +539,12 @@ typedef ptrdiff_t png_ptrdiff_t;
- #  endif
- #endif
+@@ -539,9 +541,8 @@ typedef ptrdiff_t png_ptrdiff_t;
  
 -/* png_alloc_size_t is guaranteed to be no smaller than png_size_t, and no
 - * smaller than png_uint_32.  Casts from png_size_t or png_uint_32 to
@@ -1458,33 +1334,23 @@ index c0f15547..000d7b1a 100644
 - * Casts in the other direction (from png_alloc_size_t to png_size_t or
 + * Casts in the other direction (from png_alloc_size_t to size_t or
   * png_uint_32) should be explicitly applied; however, we do not expect to
-  * encounter practical situations that require such conversions.
-  *
-@@ -553,7 +554,7 @@ typedef ptrdiff_t png_ptrdiff_t;
- #ifdef PNG_SMALL_SIZE_T
-    typedef png_uint_32 png_alloc_size_t;
+@@ -555,3 +556,3 @@ typedef ptrdiff_t png_ptrdiff_t;
  #else
 -   typedef png_size_t png_alloc_size_t;
 +   typedef size_t png_alloc_size_t;
  #endif
- 
- /* Prior to 1.6.0 libpng offered limited support for Microsoft C compiler
-@@ -589,8 +590,8 @@ typedef char                  * png_charp;
- typedef const char            * png_const_charp;
- typedef png_fixed_point       * png_fixed_point_p;
+@@ -591,4 +592,4 @@ typedef png_fixed_point       * png_fixed_point_p;
  typedef const png_fixed_point * png_const_fixed_point_p;
 -typedef png_size_t            * png_size_tp;
 -typedef const png_size_t      * png_const_size_tp;
 +typedef size_t                * png_size_tp;
 +typedef const size_t          * png_const_size_tp;
  
- #ifdef PNG_STDIO_SUPPORTED
- typedef FILE            * png_FILE_p;
 diff --git a/src/GLideNHQ/inc/pnglibconf.h b/src/GLideNHQ/inc/pnglibconf.h
 index 9e45f731..a81a642e 100644
 --- a/src/GLideNHQ/inc/pnglibconf.h
 +++ b/src/GLideNHQ/inc/pnglibconf.h
-@@ -1,10 +1,9 @@
+@@ -1,8 +1,7 @@
 -/* libpng 1.6.32 STANDARD API DEFINITION */
 -
  /* pnglibconf.h - library build configuration */
@@ -1496,28 +1362,16 @@ index 9e45f731..a81a642e 100644
 +/* Copyright (c) 2018-2024 Cosmin Truta */
 +/* Copyright (c) 1998-2002,2004,2006-2018 Glenn Randers-Pehrson */
  
- /* This code is released under the libpng license. */
- /* For conditions of distribution and use, see the disclaimer */
-@@ -20,8 +19,6 @@
- #define PNG_ALIGNED_MEMORY_SUPPORTED
- /*#undef PNG_ARM_NEON_API_SUPPORTED*/
+@@ -22,4 +21,2 @@
  /*#undef PNG_ARM_NEON_CHECK_SUPPORTED*/
 -/*#undef PNG_POWERPC_VSX_API_SUPPORTED*/
 -/*#undef PNG_POWERPC_VSX_CHECK_SUPPORTED*/
  #define PNG_BENIGN_ERRORS_SUPPORTED
- #define PNG_BENIGN_READ_ERRORS_SUPPORTED
- /*#undef PNG_BENIGN_WRITE_ERRORS_SUPPORTED*/
-@@ -30,6 +27,7 @@
- #define PNG_COLORSPACE_SUPPORTED
- #define PNG_CONSOLE_IO_SUPPORTED
+@@ -32,2 +29,3 @@
  #define PNG_CONVERT_tIME_SUPPORTED
 +/*#undef PNG_DISABLE_ADLER32_CHECK_SUPPORTED*/
  #define PNG_EASY_ACCESS_SUPPORTED
- /*#undef PNG_ERROR_NUMBERS_SUPPORTED*/
- #define PNG_ERROR_TEXT_SUPPORTED
-@@ -44,8 +42,14 @@
- #define PNG_INCH_CONVERSIONS_SUPPORTED
- #define PNG_INFO_IMAGE_SUPPORTED
+@@ -46,4 +44,10 @@
  #define PNG_IO_STATE_SUPPORTED
 +/*#undef PNG_MIPS_MMI_API_SUPPORTED*/
 +/*#undef PNG_MIPS_MMI_CHECK_SUPPORTED*/
@@ -1528,24 +1382,16 @@ index 9e45f731..a81a642e 100644
 +/*#undef PNG_POWERPC_VSX_API_SUPPORTED*/
 +/*#undef PNG_POWERPC_VSX_CHECK_SUPPORTED*/
  #define PNG_PROGRESSIVE_READ_SUPPORTED
- #define PNG_READ_16BIT_SUPPORTED
- #define PNG_READ_ALPHA_MODE_SUPPORTED
-@@ -210,7 +214,7 @@
- #define PNG_USER_HEIGHT_MAX 1000000
- #define PNG_USER_WIDTH_MAX 1000000
+@@ -212,3 +216,3 @@
  #define PNG_ZBUF_SIZE 8192
 -#define PNG_ZLIB_VERNUM 0 /* unknown */
 +#define PNG_ZLIB_VERNUM 0x1280
  #define PNG_Z_DEFAULT_COMPRESSION (-1)
- #define PNG_Z_DEFAULT_NOFILTER_STRATEGY 0
- #define PNG_Z_DEFAULT_STRATEGY 1
 diff --git a/src/Graphics/OpenGLContext/GLFunctions.cpp b/src/Graphics/OpenGLContext/GLFunctions.cpp
 index 1a6b8f68..80b1e869 100644
 --- a/src/Graphics/OpenGLContext/GLFunctions.cpp
 +++ b/src/Graphics/OpenGLContext/GLFunctions.cpp
-@@ -14,7 +14,29 @@
- 
- #elif defined(EGL)
+@@ -16,3 +16,25 @@
  
 -#define glGetProcAddress eglGetProcAddress
 +#include <dlfcn.h>
@@ -1572,15 +1418,11 @@ index 1a6b8f68..80b1e869 100644
 +}
 +#define glGetProcAddress _dlsymGetProc
  #define GL_GET_PROC_ADR(proc_type, proc_name) ptr##proc_name = (proc_type) glGetProcAddress("gl"#proc_name)
- #define GL_GET_PROC_ADR_EGL(proc_type, proc_name) ptr##proc_name = (proc_type) glGetProcAddress("egl"#proc_name)
- 
 diff --git a/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.cpp b/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.cpp
 index 952c05e7..55ba1437 100644
 --- a/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.cpp
 +++ b/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.cpp
-@@ -60,6 +60,14 @@ namespace opengl {
- #endif
- 	}
+@@ -62,2 +62,10 @@ namespace opengl {
  
 +	void FunctionWrapper::executeOverlayCommand(std::shared_ptr<OpenGlCommand> _command)
 +	{
@@ -1591,28 +1433,66 @@ index 952c05e7..55ba1437 100644
 +	}
 +
  	void FunctionWrapper::commandLoop()
- 	{
- 		bool timeToShutdown = false;
 diff --git a/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.h b/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.h
 index 27210fa8..67685436 100644
 --- a/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.h
 +++ b/src/Graphics/OpenGLContext/ThreadedOpenGl/opengl_Wrapper.h
-@@ -57,6 +57,8 @@ namespace opengl {
- 
- 	public:
+@@ -59,2 +59,4 @@ namespace opengl {
  		static void setThreadedMode(u32 _threaded);
 +		static void executeOverlayCommand(std::shared_ptr<OpenGlCommand> _command);
 +		static bool isThreadedMode() { return m_threaded_wrapper; }
  
- 		static void wrBlendFunc(GLenum sfactor, GLenum dfactor);
- 		static void wrBlendFuncSeparate(GLenum sfactorcolor, GLenum dfactorcolor, GLenum sfactoralpha, GLenum dfactoralpha);
 diff --git a/src/Graphics/OpenGLContext/mupen64plus/mupen64plus_DisplayWindow.cpp b/src/Graphics/OpenGLContext/mupen64plus/mupen64plus_DisplayWindow.cpp
-index 1573c831..03ab5c70 100644
+index 1573c831..684483a1 100644
 --- a/src/Graphics/OpenGLContext/mupen64plus/mupen64plus_DisplayWindow.cpp
 +++ b/src/Graphics/OpenGLContext/mupen64plus/mupen64plus_DisplayWindow.cpp
-@@ -56,9 +56,15 @@ void DisplayWindowMupen64plus::_setAttributes()
- {
- 	LOG(LOG_VERBOSE, "_setAttributes");
+@@ -2,2 +2,3 @@
+ #include <cstdlib>
++#include <functional>
+ #include <Graphics/Context.h>
+@@ -17,2 +18,6 @@
+ 
++extern "C" {
++#include "emu_overlay_sdl.h"
++}
++
+ #ifdef VC
+@@ -23,2 +28,34 @@ using namespace opengl;
+ 
++namespace {
++class Gliden64PresenterSwapCommand : public OpenGlCommand {
++public:
++	Gliden64PresenterSwapCommand() : OpenGlCommand(true, false, "LeafPresenterSwap", false) {}
++
++	static std::shared_ptr<OpenGlCommand> get(std::function<void()> callback) {
++		static int poolId = OpenGlCommandPool::get().getNextAvailablePool();
++		auto ptr = getFromPool<Gliden64PresenterSwapCommand>(poolId);
++		ptr->m_callback = std::move(callback);
++		return ptr;
++	}
++
++	void commandToExecute() override {
++		m_callback();
++		m_callback = nullptr;
++	}
++
++private:
++	std::function<void()> m_callback;
++};
++
++static void gliden64_draw_presenter_on_gl_thread()
++{
++	if (FunctionWrapper::isThreadedMode())
++		FunctionWrapper::executeOverlayCommand(
++			Gliden64PresenterSwapCommand::get([]() { overlay_sdl_present_draw(); })
++		);
++	else
++		overlay_sdl_present_draw();
++}
++}
++
+ class DisplayWindowMupen64plus : public DisplayWindow
+@@ -58,2 +95,7 @@ void DisplayWindowMupen64plus::_setAttributes()
  
 +#ifdef EGL
 +	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_CONTEXT_PROFILE_MASK, M64P_GL_CONTEXT_PROFILE_ES);
@@ -1620,58 +1500,48 @@ index 1573c831..03ab5c70 100644
 +	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_CONTEXT_MINOR_VERSION, 0);
 +#else
  	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_CONTEXT_PROFILE_MASK, M64P_GL_CONTEXT_PROFILE_CORE);
- 	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_CONTEXT_MAJOR_VERSION, 3);
+@@ -61,2 +103,3 @@ void DisplayWindowMupen64plus::_setAttributes()
  	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_CONTEXT_MINOR_VERSION, 3);
 +#endif
  
- 	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_DOUBLEBUFFER, 1);
- 	FunctionWrapper::CoreVideo_GL_SetAttribute(M64P_GL_SWAP_CONTROL, config.video.verticalSync);
+@@ -165,2 +208,5 @@ void DisplayWindowMupen64plus::_swapBuffers()
+ 
++	if (overlay_sdl_present_active())
++		gliden64_draw_presenter_on_gl_thread();
++
+ 	FunctionWrapper::CoreVideo_GL_SwapBuffers();
 diff --git a/src/Graphics/OpenGLContext/opengl_BufferedDrawer.cpp b/src/Graphics/OpenGLContext/opengl_BufferedDrawer.cpp
 index bf781a26..d4571f7e 100644
 --- a/src/Graphics/OpenGLContext/opengl_BufferedDrawer.cpp
 +++ b/src/Graphics/OpenGLContext/opengl_BufferedDrawer.cpp
-@@ -91,9 +91,7 @@ void BufferedDrawer::_updateBuffer(Buffer & _buffer, u32 _count, u32 _dataSize,
- 		memcpy(&_buffer.data[_buffer.offset], _data, _dataSize);
- 	} else {
+@@ -93,5 +93,3 @@ void BufferedDrawer::_updateBuffer(Buffer & _buffer, u32 _count, u32 _dataSize,
  		m_bindBuffer->bind(Parameter(_buffer.type), ObjectHandle(_buffer.handle));
 -		void* buffer_pointer = glMapBufferRange(_buffer.type, _buffer.offset, _dataSize, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
 -		memcpy(buffer_pointer, _data, _dataSize);
 -		glUnmapBuffer(_buffer.type);
 +		glBufferSubData(_buffer.type, _buffer.offset, _dataSize, _data);
  	}
- 
- 	_buffer.offset += _dataSize;
 diff --git a/src/Graphics/OpenGLContext/opengl_GLInfo.cpp b/src/Graphics/OpenGLContext/opengl_GLInfo.cpp
 index 3f9bc3e0..e9b0c042 100644
 --- a/src/Graphics/OpenGLContext/opengl_GLInfo.cpp
 +++ b/src/Graphics/OpenGLContext/opengl_GLInfo.cpp
-@@ -6,7 +6,8 @@
- #include <Graphics/Parameters.h>
- 
+@@ -8,3 +8,4 @@
  #ifdef EGL
 -#include <EGL/egl.h>
 +#include <dlfcn.h>
 +#define eglGetProcAddress(name) dlsym(RTLD_DEFAULT, name)
  #endif
- 
- #ifdef OS_ANDROID
-@@ -173,6 +174,9 @@ void GLInfo::init() {
- 	if (renderer == Renderer::PowerVR) {
- 		config.frameBufferEmulation.forceDepthBufferClear = 1;
+@@ -175,2 +176,5 @@ void GLInfo::init() {
  		config.generalEmulation.enableFragmentDepthWrite = 0;
 +		// Disable bufferStorage on PowerVR to avoid glBufferStorageEXT crash
 +		// This forces UnbufferedDrawer with glBufferData fallback on GLES
 +		bufferStorage = false;
  	}
- 
- #ifdef OS_ANDROID
 diff --git a/src/GraphicsDrawer.h b/src/GraphicsDrawer.h
 index 61e636e6..b7625837 100644
 --- a/src/GraphicsDrawer.h
 +++ b/src/GraphicsDrawer.h
-@@ -17,9 +17,9 @@ namespace graphics {
- struct CachedTexture;
- struct FrameBuffer;
+@@ -19,5 +19,5 @@ struct FrameBuffer;
  
 -constexpr u32 VERTBUFF_SIZE = 256U;
 +constexpr u32 VERTBUFF_SIZE = 512U;
@@ -1679,40 +1549,25 @@ index 61e636e6..b7625837 100644
 -constexpr u32 ELEMBUFF_SIZE = 1024U;
 +constexpr u32 ELEMBUFF_SIZE = 2048U;
  
- constexpr f32 SCREEN_SIZE_DIM = 640.0f;
- constexpr u32 MIPMAP_TILE_WIDTH = 256u;
 diff --git a/src/RSP.cpp b/src/RSP.cpp
 index 932cb4e5..c19b42c8 100644
 --- a/src/RSP.cpp
 +++ b/src/RSP.cpp
-@@ -1,5 +1,8 @@
- #include <algorithm>
+@@ -2,2 +2,5 @@
  #include <cstring>
 +
 +extern int g_frameSkip;
 +#include <SDL2/SDL.h>
  #include "DebugDump.h"
- #include "RSP.h"
- #include "RDP.h"
-@@ -45,6 +48,7 @@ void _ProcessDList()
- 		RSP.w0 = *(u32*)&RDRAM[RSP.PC[RSP.PCi]];
- 		RSP.w1 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] + 4];
+@@ -47,2 +50,3 @@ void _ProcessDList()
  		RSP.cmd = _SHIFTR(RSP.w0, 24, 8);
 +		__builtin_prefetch(&RDRAM[RSP.PC[RSP.PCi] + 8], 0, 3);
  
- #ifdef DEBUG_DUMP
- 		DebugMsg(DEBUG_LOW, "0x%08lX: CMD=0x%02lX W0=0x%08lX W1=0x%08lX\n", RSP.PC[RSP.PCi], _SHIFTR(RSP.w0, 24, 8), RSP.w0, RSP.w1);
-@@ -82,6 +86,7 @@ void _ProcessDListFactor5()
- 		RSP.w0 = *(u32*)&RDRAM[RSP.PC[RSP.PCi]];
- 		RSP.w1 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] + 4];
+@@ -84,2 +88,3 @@ void _ProcessDListFactor5()
  		RSP.cmd = _SHIFTR(RSP.w0, 24, 8);
 +		__builtin_prefetch(&RDRAM[RSP.PC[RSP.PCi] + 16], 0, 3);
  
- #ifdef DEBUG_DUMP
- 		DebugMsg(DEBUG_LOW, "0x%08lX: CMD=0x%02lX W0=0x%08lX W1=0x%08lX\n", RSP.PC[RSP.PCi], _SHIFTR(RSP.w0, 24, 8), RSP.w0, RSP.w1);
-@@ -111,6 +116,50 @@ void RSP_ProcessDList()
- {
- 	RSP.LLE = false;
+@@ -113,2 +118,46 @@ void RSP_ProcessDList()
  
 +	// Hybrid adaptive frame skip: activate fixed-ratio skip when FPS drops below target.
 +	// g_frameSkip: 0=off, 1=target 20fps, 2=target 25fps, 3=target 30fps
@@ -1759,62 +1614,70 @@ index 932cb4e5..c19b42c8 100644
 +	}
 +
  	if (ConfigOpen || dwnd().isResizeWindow()) {
- 		*REG.MI_INTR |= MI_INTR_DP;
- 		CheckInterrupts();
 diff --git a/src/TextureFilterHandler.cpp b/src/TextureFilterHandler.cpp
 index aa864df6..86784c17 100644
 --- a/src/TextureFilterHandler.cpp
 +++ b/src/TextureFilterHandler.cpp
-@@ -123,6 +123,8 @@ void TextureFilterHandler::init()
- 		wRomName, // name of ROM. must be no longer than 256 characters
- 		displayLoadProgress);
+@@ -125,2 +125,4 @@ void TextureFilterHandler::init()
  
 +	// Clear load progress display (signals loading is complete)
 +	displayLoadProgress(L"");
  }
- 
- void TextureFilterHandler::shutdown()
 diff --git a/src/mupenplus/GLideN64_mupenplus.h b/src/mupenplus/GLideN64_mupenplus.h
 index ba4bb168..2f7f602c 100644
 --- a/src/mupenplus/GLideN64_mupenplus.h
 +++ b/src/mupenplus/GLideN64_mupenplus.h
-@@ -52,6 +52,10 @@ extern ptr_VidExt_GL_GetAttribute       CoreVideo_GL_GetAttribute;
- extern ptr_VidExt_GL_SwapBuffers        CoreVideo_GL_SwapBuffers;
- extern ptr_VidExt_GL_GetDefaultFramebuffer CoreVideo_GL_GetDefaultFramebuffer;
+@@ -54,2 +54,6 @@ extern ptr_VidExt_GL_GetDefaultFramebuffer CoreVideo_GL_GetDefaultFramebuffer;
  
 +extern ptr_CoreDoCommand                CoreDoCommand;
 +extern ptr_CoreAddCheat                 CoreAddCheat;
 +extern ptr_CoreCheatEnabled             CoreCheatEnabled;
 +
  extern ptr_PluginGetVersion             CoreGetVersion;
- 
- extern void*                            CoreDebugCallbackContext;
 diff --git a/src/mupenplus/MupenPlusAPIImpl.cpp b/src/mupenplus/MupenPlusAPIImpl.cpp
 index f0595819..2a353ca4 100644
 --- a/src/mupenplus/MupenPlusAPIImpl.cpp
 +++ b/src/mupenplus/MupenPlusAPIImpl.cpp
-@@ -47,6 +47,10 @@ ptr_VidExt_GL_GetAttribute       CoreVideo_GL_GetAttribute = nullptr;
- ptr_VidExt_GL_SwapBuffers        CoreVideo_GL_SwapBuffers = nullptr;
- ptr_VidExt_GL_GetDefaultFramebuffer CoreVideo_GL_GetDefaultFramebuffer = nullptr;
+@@ -49,2 +49,6 @@ ptr_VidExt_GL_GetDefaultFramebuffer CoreVideo_GL_GetDefaultFramebuffer = nullptr
  
 +ptr_CoreDoCommand                CoreDoCommand = nullptr;
 +ptr_CoreAddCheat                 CoreAddCheat = nullptr;
 +ptr_CoreCheatEnabled             CoreCheatEnabled = nullptr;
 +
  ptr_PluginGetVersion             CoreGetVersion = nullptr;
- 
- void*                            CoreDebugCallbackContext = nullptr;
-@@ -100,6 +104,10 @@ m64p_error PluginAPI::PluginStartup(m64p_dynlib_handle _CoreLibHandle, void* Con
- 
- 	CoreGetVersion = (ptr_PluginGetVersion) DLSYM(_CoreLibHandle, "PluginGetVersion");
+@@ -102,2 +106,6 @@ m64p_error PluginAPI::PluginStartup(m64p_dynlib_handle _CoreLibHandle, void* Con
  
 +	CoreDoCommand = (ptr_CoreDoCommand) DLSYM(_CoreLibHandle, "CoreDoCommand");
 +	CoreAddCheat = (ptr_CoreAddCheat) DLSYM(_CoreLibHandle, "CoreAddCheat");
 +	CoreCheatEnabled = (ptr_CoreCheatEnabled) DLSYM(_CoreLibHandle, "CoreCheatEnabled");
 +
  #ifndef M64P_GLIDENUI
- 	if (Config_SetDefault()) {
- 		config.version = ConfigGetParamInt(g_configVideoGliden64, "configVersion");
+diff --git a/src/toolchain-aarch64.cmake b/src/toolchain-aarch64.cmake
+new file mode 100644
+index 00000000..a6bbc75d
+--- /dev/null
++++ b/src/toolchain-aarch64.cmake
+@@ -0,0 +1,20 @@
++set(CMAKE_SYSTEM_NAME Linux)
++set(CMAKE_SYSTEM_PROCESSOR aarch64)
++set(CMAKE_C_COMPILER /opt/mlp1-toolchain/bin/aarch64-buildroot-linux-gnu-gcc)
++set(CMAKE_CXX_COMPILER /opt/mlp1-toolchain/bin/aarch64-buildroot-linux-gnu-g++)
++set(CMAKE_SYSROOT /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot)
++set(CMAKE_FIND_ROOT_PATH /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot)
++set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
++set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
++set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
++set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=cortex-a55 -ffunction-sections -fdata-sections")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -mcpu=cortex-a55 -ffunction-sections -fdata-sections")
++set(SDL_TTF_INCLUDE_DIRS /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/include/SDL2)
++set(SDL_TTF_LIBRARIES /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/lib/libSDL2_ttf.so)
++set(PNG_LIBRARY /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/lib/libpng16.so)
++set(PNG_PNG_INCLUDE_DIR /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/include/libpng16)
++set(ZLIB_LIBRARY /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/lib/libz.so)
++set(ZLIB_INCLUDE_DIR /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/include)
++set(FREETYPE_INCLUDE_DIRS /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/include/freetype2)
++set(FREETYPE_LIBRARIES /opt/mlp1-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/lib/libfreetype.so)
 diff --git a/toolchain-aarch64.cmake b/toolchain-aarch64.cmake
 new file mode 100644
 index 00000000..80840e90

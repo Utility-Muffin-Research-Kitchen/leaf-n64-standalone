@@ -73,13 +73,14 @@ index e3b8d3e..a77ac0b 100644
 +    SetScreenMult(windowSetting.uEffDisplayWidth/windowSetting.fViWidth, windowSetting.uEffDisplayHeight/windowSetting.fViHeight);
      CRender::g_pRender->UpdateClipRectangle();
 diff --git a/src/OGLGraphicsContext.cpp b/src/OGLGraphicsContext.cpp
-index e4e57ba..91e8516 100644
+index e4e57ba..44aae8c 100644
 --- a/src/OGLGraphicsContext.cpp
 +++ b/src/OGLGraphicsContext.cpp
-@@ -38,2 +38,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+@@ -38,2 +38,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  
 +extern "C" {
 +#include "emu_overlay_sdl.h"
++#include "emu_frontend.h"
 +}
 +
 +static void overlay_core_swap_buffers(void)
@@ -88,20 +89,21 @@ index e4e57ba..91e8516 100644
 +}
 +
  COGLGraphicsContext::COGLGraphicsContext() :
-@@ -153,2 +162,4 @@ bool COGLGraphicsContext::Initialize(uint32 dwWidth, uint32 dwHeight, BOOL bWind
+@@ -153,2 +163,4 @@ bool COGLGraphicsContext::Initialize(uint32 dwWidth, uint32 dwHeight, BOOL bWind
      InitOGLExtension();
 +    overlay_sdl_present_init((int)windowSetting.uDisplayWidth, (int)windowSetting.uDisplayHeight);
 +    overlay_sdl_present_bind_target();
  
-@@ -209,2 +220,4 @@ bool COGLGraphicsContext::ResizeInitialize(uint32 dwWidth, uint32 dwHeight, BOOL
+@@ -209,2 +221,4 @@ bool COGLGraphicsContext::ResizeInitialize(uint32 dwWidth, uint32 dwHeight, BOOL
      InitState();
 +    overlay_sdl_present_init((int)windowSetting.uDisplayWidth, (int)windowSetting.uDisplayHeight);
 +    overlay_sdl_present_bind_target();
      Unlock();
-@@ -415,4 +428,14 @@ void COGLGraphicsContext::UpdateFrame(bool swaponly)
+@@ -415,4 +429,15 @@ void COGLGraphicsContext::UpdateFrame(bool swaponly)
  
 -   CoreVideo_GL_SwapBuffers();
 -   
++   emu_frontend_render_hud((int)windowSetting.uDisplayWidth, (int)windowSetting.uDisplayHeight);
 +   overlay_sdl_present_swap(overlay_core_swap_buffers);
 +
 +   // Clear full framebuffer to black for letterbox/pillarbox bars

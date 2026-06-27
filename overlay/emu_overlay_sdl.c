@@ -419,11 +419,12 @@ void overlay_sdl_present_bind_target(void) {
 	glViewport(0, 0, s_presentLogicalW, s_presentLogicalH);
 }
 
-void overlay_sdl_present_swap(OverlaySdlSwapFn swap_fn) {
-	if (!swap_fn)
-		return;
+int overlay_sdl_present_active(void) {
+	return s_presentEnabled;
+}
+
+void overlay_sdl_present_draw(void) {
 	if (!s_presentEnabled) {
-		swap_fn();
 		return;
 	}
 
@@ -474,8 +475,6 @@ void overlay_sdl_present_swap(OverlaySdlSwapFn swap_fn) {
 		glUniform1i(s_presentLocTexture, 0);
 	glDrawArrays(GL_TRIANGLES, 0, 6);
 
-	swap_fn();
-
 	glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)savedFramebuffer);
 	glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
 	if (savedBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
@@ -491,6 +490,14 @@ void overlay_sdl_present_swap(OverlaySdlSwapFn swap_fn) {
 	glActiveTexture((GLenum)savedActiveTexUnit);
 
 	overlay_sdl_present_bind_target();
+}
+
+void overlay_sdl_present_swap(OverlaySdlSwapFn swap_fn) {
+	if (!swap_fn)
+		return;
+	if (s_presentEnabled)
+		overlay_sdl_present_draw();
+	swap_fn();
 }
 
 // ---------------------------------------------------------------------------

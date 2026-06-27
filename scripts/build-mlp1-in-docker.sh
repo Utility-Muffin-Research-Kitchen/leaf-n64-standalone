@@ -5,7 +5,7 @@ ROOT_DIR="/build"
 SRC="${MLP1_SRC:-$ROOT_DIR/workdir/mlp1/src}"
 BUILD_DIR="${MLP1_BUILD_DIR:-$ROOT_DIR/output/mlp1/build}"
 JOBS="${BUILD_JOBS:-$(nproc)}"
-BUILD_GLIDEN64="${MLP1_BUILD_GLIDEN64:-0}"
+BUILD_GLIDEN64="${MLP1_BUILD_GLIDEN64:-1}"
 
 : "${CROSS_COMPILE:=aarch64-buildroot-linux-gnu-}"
 : "${SYSROOT:?SYSROOT is required from the MLP1 toolchain image}"
@@ -91,7 +91,8 @@ set(FREETYPE_LIBRARIES $SYSROOT/usr/lib/libfreetype.so)
 EOF
     cmake -S "$SRC/GLideN64/src" -B "$SRC/GLideN64/src/build-mlp1" \
         -DCMAKE_TOOLCHAIN_FILE="$SRC/GLideN64/src/toolchain-aarch64.cmake" \
-        -DMUPENPLUSAPI=ON -DEGL=ON -DMESA=ON -DNEON_OPT=ON -DCRC_ARMV8=ON
+        -DMUPENPLUSAPI=ON -DEGL=ON -DMESA=ON -DNEON_OPT=ON -DCRC_ARMV8=ON \
+        -DUSE_SYSTEM_LIBS=ON
     cmake --build "$SRC/GLideN64/src/build-mlp1" --target mupen64plus-video-GLideN64 --parallel "$JOBS"
 fi
 
@@ -109,9 +110,7 @@ copy_file "$SRC/mupen64plus-audio-sdl/projects/unix/mupen64plus-audio-sdl.so" "$
 copy_file "$SRC/mupen64plus-input-sdl/projects/unix/mupen64plus-input-sdl.so" "$BUILD_DIR/lib/mupen64plus-input-sdl.so"
 copy_file "$SRC/mupen64plus-rsp-hle/projects/unix/mupen64plus-rsp-hle.so" "$BUILD_DIR/lib/mupen64plus-rsp-hle.so"
 copy_file "$SRC/mupen64plus-video-rice/projects/unix/mupen64plus-video-rice.so" "$BUILD_DIR/lib/mupen64plus-video-rice.so"
-if [ -f "$SRC/GLideN64/src/build-mlp1/plugin/Release/mupen64plus-video-GLideN64.so" ]; then
-    cp -f "$SRC/GLideN64/src/build-mlp1/plugin/Release/mupen64plus-video-GLideN64.so" "$BUILD_DIR/lib/"
-fi
+copy_file "$SRC/GLideN64/src/build-mlp1/plugin/Release/mupen64plus-video-GLideN64.so" "$BUILD_DIR/lib/mupen64plus-video-GLideN64.so"
 copy_file "$SRC/7zip/7zzs" "$BUILD_DIR/lib/7zzs"
 copy_file "$SRC/7zip/License.txt" "$BUILD_DIR/lib/7zzs.LICENSE"
 

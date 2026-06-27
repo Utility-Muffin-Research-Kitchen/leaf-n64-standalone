@@ -225,7 +225,6 @@ set +e
     --cachedir "$CACHE_DIR" \
     --set "Video-General[ScreenWidth]=$SCREEN_W" \
     --set "Video-General[ScreenHeight]=$SCREEN_H" \
-    --set "Video-General[Rotate]=0" \
     --set "Core[SaveSRAMPath]=$BATTERY_SAVE_DIR/" \
     --set "Core[SaveStatePath]=$STATE_SAVE_DIR/" \
     --set "Video-GLideN64[txPath]=$ROMS_PATH/N64/.hires_texture" \

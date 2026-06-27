@@ -18,6 +18,7 @@ need_file "$BUILD_DIR/lib/mupen64plus-audio-sdl.so"
 need_file "$BUILD_DIR/lib/mupen64plus-input-sdl.so"
 need_file "$BUILD_DIR/lib/mupen64plus-rsp-hle.so"
 need_file "$BUILD_DIR/lib/mupen64plus-video-rice.so"
+need_file "$BUILD_DIR/lib/mupen64plus-video-GLideN64.so"
 need_file "$BUILD_DIR/lib/7zzs"
 need_file "$BUILD_DIR/defaults/default.cfg"
 need_file "$BUILD_DIR/defaults/overlay_settings.json"
@@ -34,10 +35,7 @@ cp -f "$ROOT_DIR/LICENSE" "$OUTPUT_DIR/LICENSE.txt"
 chmod 755 "$OUTPUT_DIR/launch.sh" "$OUTPUT_DIR/bin/"* "$OUTPUT_DIR/lib/"*.so* "$OUTPUT_DIR/lib/7zzs"
 chmod 644 "$OUTPUT_DIR/lib/"*.LICENSE
 
-video_plugins='"rice"'
-if [ -f "$OUTPUT_DIR/lib/mupen64plus-video-GLideN64.so" ]; then
-    video_plugins='"rice", "gliden64"'
-fi
+video_plugins='"rice", "gliden64"'
 
 cat >"$OUTPUT_DIR/manifest.json" <<EOF
 {
@@ -76,7 +74,7 @@ under USERDATA_PATH/mupen64plus, battery saves under Saves/N64, and states
 under States/Mupen64Plus Standalone.
 
 Rice is the default video plugin for the first MLP1 performance pass. GLideN64
-may be included when built with MLP1_BUILD_GLIDEN64=1.
+is built and bundled for users who prefer the higher-accuracy renderer.
 EOF
 
 find "$OUTPUT_DIR" -maxdepth 3 -type f | sort

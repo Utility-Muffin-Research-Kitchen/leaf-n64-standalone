@@ -7,7 +7,7 @@ TOOLCHAIN_IMAGE="${TOOLCHAIN_IMAGE:-ghcr.io/utility-muffin-research-kitchen/mlp1
 MLP1_SRC="${MLP1_SRC:-$ROOT_DIR/workdir/mlp1/src}"
 MLP1_BUILD_DIR="${MLP1_BUILD_DIR:-$ROOT_DIR/output/mlp1/build}"
 BUILD_JOBS="${BUILD_JOBS:-}"
-MLP1_BUILD_GLIDEN64="${MLP1_BUILD_GLIDEN64:-0}"
+MLP1_BUILD_GLIDEN64="${MLP1_BUILD_GLIDEN64:-1}"
 
 if ! "$DOCKER" image inspect "$TOOLCHAIN_IMAGE" >/dev/null 2>&1; then
     echo "missing Docker image: $TOOLCHAIN_IMAGE" >&2

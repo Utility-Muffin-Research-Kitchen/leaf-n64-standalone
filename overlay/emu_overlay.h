@@ -22,9 +22,9 @@ typedef enum {
 	EMU_OVL_ACTION_SAVE_STATE,
 	EMU_OVL_ACTION_LOAD_STATE,
 	EMU_OVL_ACTION_QUIT,
-	EMU_OVL_ACTION_SAVE_CONSOLE,    // Save Changes → Save for Console
-	EMU_OVL_ACTION_SAVE_GAME,       // Save Changes → Save for Game
-	EMU_OVL_ACTION_RESTORE_DEFAULTS // Save Changes → Restore Defaults
+	EMU_OVL_ACTION_SAVE_CONSOLE,    // Save Changes -> Save for N64
+	EMU_OVL_ACTION_SAVE_GAME,       // Save Changes -> Save for This Game
+	EMU_OVL_ACTION_RESTORE_DEFAULTS // Save Changes -> Restore Defaults
 } EmuOvlAction;
 
 typedef struct {

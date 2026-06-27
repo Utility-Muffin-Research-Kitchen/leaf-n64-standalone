@@ -52,6 +52,10 @@ static Uint32 s_prevButtons = 0;
 static int s_prevAxisX = 0;
 static int s_prevAxisY = 0;
 
+static unsigned int s_fpsLastTick = 0;
+static int s_fpsFrameCount = 0;
+static float s_fpsValue = 0.0f;
+
 static int env_int_range(const char* name, int fallback, int min_value, int max_value) {
 	const char* value = getenv(name);
 	char* end = NULL;
@@ -2262,7 +2266,7 @@ static void handle_save_for_console(void) {
 		if (f) fclose(f);
 	}
 	s_overlay.scope = EMU_SCOPE_CONSOLE;
-	fprintf(stderr, "[Overlay] Saved for console.\n");
+	fprintf(stderr, "[Overlay] Saved for N64.\n");
 }
 
 static void handle_save_for_game(void) {
@@ -2293,7 +2297,7 @@ static void handle_save_for_game(void) {
 	emu_ovl_cfg_apply_staged(&s_overlayConfig);
 	emu_frontend_write_button_map_file();
 	s_overlay.scope = EMU_SCOPE_GAME;
-	fprintf(stderr, "[Overlay] Saved for game.\n");
+	fprintf(stderr, "[Overlay] Saved for this game.\n");
 }
 
 static void handle_restore_defaults(void) {
@@ -2455,6 +2459,72 @@ void emu_frontend_frame(int w, int h) {
 		EmuOvlAction action = run_overlay_loop();
 		handle_overlay_action(action);
 	}
+}
+
+static bool show_fps_enabled(void) {
+	if (!s_overlayConfigLoaded)
+		return false;
+	for (int s = 0; s < s_overlayConfig.section_count; s++) {
+		for (int i = 0; i < s_overlayConfig.sections[s].item_count; i++) {
+			EmuOvlItem* item = &s_overlayConfig.sections[s].items[i];
+			if (strcmp(item->key, "ShowFPS") == 0)
+				return item->current_value != 0;
+		}
+	}
+	return false;
+}
+
+void emu_frontend_render_hud(int w, int h) {
+	if (!s_initialized || !s_overlayInitialized || !s_overlay.render)
+		return;
+	if (emu_ovl_is_active(&s_overlay))
+		return;
+	if (!show_fps_enabled()) {
+		s_fpsLastTick = 0;
+		s_fpsFrameCount = 0;
+		s_fpsValue = 0.0f;
+		return;
+	}
+
+	unsigned int now = SDL_GetTicks();
+	if (s_fpsLastTick == 0)
+		s_fpsLastTick = now;
+	s_fpsFrameCount++;
+	if (now - s_fpsLastTick >= 1000) {
+		s_fpsValue = (float)s_fpsFrameCount * 1000.0f / (float)(now - s_fpsLastTick);
+		s_fpsFrameCount = 0;
+		s_fpsLastTick = now;
+	}
+	if (s_fpsValue <= 0.0f)
+		return;
+
+	EmuOvlRenderBackend* r = s_overlay.render;
+	int scale = (w <= 1024) ? 3 : 2;
+	int font = EMU_OVL_FONT_TINY;
+	char label[32];
+	snprintf(label, sizeof(label), "%.0f FPS", s_fpsValue);
+
+	int pad_x = 6 * scale;
+	int pad_y = 3 * scale;
+	int text_w = r->text_width(label, font);
+	int text_h = r->text_height(font);
+	int box_w = text_w + pad_x * 2;
+	int box_h = text_h + pad_y * 2;
+	int margin = 10 * scale;
+	int x = w - margin - box_w;
+	int y = margin;
+	int radius = (int)((float)(box_h / 2) * s_overlay.theme.pill_radius_ratio + 0.5f);
+	if (radius < 0)
+		radius = 0;
+
+	r->begin_frame();
+	if (r->draw_rounded_rect)
+		r->draw_rounded_rect(x, y, box_w, box_h, radius, s_overlay.theme.panel);
+	else
+		r->draw_rect(x, y, box_w, box_h, s_overlay.theme.panel);
+	r->draw_text(label, x + pad_x, y + (box_h - text_h) / 2,
+				 s_overlay.theme.text, font);
+	r->end_frame();
 }
 
 void emu_frontend_cleanup(void) {

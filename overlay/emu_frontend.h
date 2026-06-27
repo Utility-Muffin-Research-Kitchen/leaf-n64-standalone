@@ -45,6 +45,9 @@ void emu_frontend_init(EmuFrontendCoreAPI* api, EmuFrontendPluginOps* ops);
 // screen dimensions (used for overlay GL init on first open).
 void emu_frontend_frame(int w, int h);
 
+// Draw lightweight always-on HUD elements before the video plugin swaps.
+void emu_frontend_render_hud(int w, int h);
+
 // Cleanup (called on exit paths — turbo files, rewind buffer)
 void emu_frontend_cleanup(void);
 
