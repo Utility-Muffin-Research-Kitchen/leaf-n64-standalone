@@ -58,6 +58,14 @@ static unsigned int s_fpsLastTick = 0;
 static int s_fpsFrameCount = 0;
 static float s_fpsValue = 0.0f;
 
+static bool s_leafSaveQuitPending = false;
+static int s_leafSaveQuitDelayFrames = 0;
+static bool s_leafSaveQuitWaitingForState = false;
+static Uint32 s_leafSaveQuitStartedAt = 0;
+static Uint32 s_leafSaveQuitLastPollAt = 0;
+static long long s_leafSaveQuitLastSize = -1;
+static int s_leafSaveQuitStablePolls = 0;
+
 static int env_int_range(const char* name, int fallback, int min_value, int max_value) {
 	const char* value = getenv(name);
 	char* end = NULL;
@@ -254,42 +262,10 @@ static bool nextui_markers_disabled(void) {
 	return value && value[0] != '\0' && strcmp(value, "0") != 0;
 }
 
-static int wait_for_state_write(int slot) {
-	char path[512];
-	if (build_state_path(slot, path, sizeof(path)) != 0)
-		return -1;
-
-	const int timeout_ms = 8000;
-	const int poll_ms = 100;
-	const int warmup_ms = 800;
-	const int stable_polls = 3;
-	long long last_size = -1;
-	int stable = 0;
-	int elapsed = 0;
-
-	while (elapsed < timeout_ms) {
-		SDL_Delay(poll_ms);
-		elapsed += poll_ms;
-
-		struct stat st;
-		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
-			continue;
-		long long size = (long long)st.st_size;
-		if (size != last_size) {
-			stable = 0;
-		} else if (elapsed >= warmup_ms && size > 0 && ++stable >= stable_polls) {
-			sync();
-			fprintf(stderr, "[Overlay] Savestate settled slot=%d bytes=%lld waited_ms=%d\n",
-					slot, size, elapsed);
-			return 0;
-		}
-		last_size = size;
-	}
-
-	fprintf(stderr, "[Overlay] Savestate did not settle slot=%d within %dms\n",
-			slot, timeout_ms);
-	return -1;
-}
+#define STATE_WRITE_TIMEOUT_MS 8000
+#define STATE_WRITE_POLL_MS 100
+#define STATE_WRITE_WARMUP_MS 800
+#define STATE_WRITE_STABLE_POLLS 3
 
 // ---------------------------------------------------------------------------
 // CPU mode (switchable via overlay menu)
@@ -1339,23 +1315,105 @@ static int save_leaf_resume_thumbnail(void) {
 	return s_overlay.render->save_captured_frame(path);
 }
 
-static void save_leaf_resume_and_quit(void) {
+#define LEAF_SAVE_QUIT_DELAY_FRAMES 2
+
+static void queue_leaf_resume_and_quit(void) {
+	if (s_leafSaveQuitPending)
+		return;
+	s_leafSaveQuitPending = true;
+	s_leafSaveQuitDelayFrames = LEAF_SAVE_QUIT_DELAY_FRAMES;
+	s_leafSaveQuitWaitingForState = false;
+	fprintf(stderr, "[Overlay] Save & Quit queued; waiting for gameplay frame\n");
+}
+
+static void finish_leaf_resume_and_quit(void) {
+	s_leafSaveQuitPending = false;
+	s_leafSaveQuitWaitingForState = false;
+	render_overlay_status("Quitting...");
+	request_stop();
+}
+
+static void start_leaf_resume_and_quit_save(void) {
 	capture_overlay_frame();
 	render_overlay_status("Saving...");
 
 	int save_rc = save_state_slot(LEAF_RESUME_STATE_SLOT);
 	int thumb_rc = save_leaf_resume_thumbnail();
-	if (save_rc == 0)
-		wait_for_state_write(LEAF_RESUME_STATE_SLOT);
-	else
+	if (save_rc != 0) {
 		fprintf(stderr, "[Overlay] Save & Quit state save failed slot=%d rc=%d; quitting anyway\n",
 				LEAF_RESUME_STATE_SLOT, save_rc);
+		finish_leaf_resume_and_quit();
+		return;
+	}
 	if (thumb_rc != 0)
 		fprintf(stderr, "[Overlay] Save & Quit thumbnail failed slot=%d; quitting anyway\n",
 				LEAF_RESUME_STATE_SLOT);
 
-	render_overlay_status("Quitting...");
-	request_stop();
+	s_leafSaveQuitWaitingForState = true;
+	s_leafSaveQuitStartedAt = SDL_GetTicks();
+	s_leafSaveQuitLastPollAt = 0;
+	s_leafSaveQuitLastSize = -1;
+	s_leafSaveQuitStablePolls = 0;
+	fprintf(stderr, "[Overlay] Save & Quit state save requested slot=%d\n",
+			LEAF_RESUME_STATE_SLOT);
+}
+
+static bool poll_leaf_resume_state_settled(void) {
+	Uint32 now = SDL_GetTicks();
+	Uint32 elapsed = now - s_leafSaveQuitStartedAt;
+	if (s_leafSaveQuitLastPollAt != 0 &&
+		(Uint32)(now - s_leafSaveQuitLastPollAt) < STATE_WRITE_POLL_MS) {
+		return false;
+	}
+	s_leafSaveQuitLastPollAt = now;
+
+	char path[512];
+	if (build_state_path(LEAF_RESUME_STATE_SLOT, path, sizeof(path)) != 0) {
+		fprintf(stderr, "[Overlay] Save & Quit state path unavailable; quitting anyway\n");
+		finish_leaf_resume_and_quit();
+		return true;
+	}
+
+	struct stat st;
+	if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+		long long size = (long long)st.st_size;
+		if (size != s_leafSaveQuitLastSize) {
+			s_leafSaveQuitStablePolls = 0;
+		} else if (elapsed >= STATE_WRITE_WARMUP_MS &&
+				   size > 0 &&
+				   ++s_leafSaveQuitStablePolls >= STATE_WRITE_STABLE_POLLS) {
+			sync();
+			fprintf(stderr, "[Overlay] Savestate settled slot=%d bytes=%lld waited_ms=%u\n",
+					LEAF_RESUME_STATE_SLOT, size, elapsed);
+			finish_leaf_resume_and_quit();
+			return true;
+		}
+		s_leafSaveQuitLastSize = size;
+	}
+
+	if (elapsed >= STATE_WRITE_TIMEOUT_MS) {
+		fprintf(stderr, "[Overlay] Savestate did not settle slot=%d within %dms; quitting anyway\n",
+				LEAF_RESUME_STATE_SLOT, STATE_WRITE_TIMEOUT_MS);
+		finish_leaf_resume_and_quit();
+		return true;
+	}
+	return false;
+}
+
+static bool process_pending_leaf_save_quit(void) {
+	if (!s_leafSaveQuitPending)
+		return false;
+	if (s_leafSaveQuitWaitingForState) {
+		render_overlay_status("Saving...");
+		poll_leaf_resume_state_settled();
+		return true;
+	}
+	if (s_leafSaveQuitDelayFrames > 0) {
+		s_leafSaveQuitDelayFrames--;
+		return true;
+	}
+	start_leaf_resume_and_quit_save();
+	return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1364,7 +1422,7 @@ static void save_leaf_resume_and_quit(void) {
 
 static void trigger_game_switcher(void) {
 	if (nextui_markers_disabled()) {
-		save_leaf_resume_and_quit();
+		queue_leaf_resume_and_quit();
 		return;
 	}
 	save_state_slot(-1);
@@ -2513,7 +2571,7 @@ static void handle_overlay_action(EmuOvlAction action) {
 		request_stop();
 		break;
 	case EMU_OVL_ACTION_SAVE_AND_QUIT:
-		save_leaf_resume_and_quit();
+		queue_leaf_resume_and_quit();
 		break;
 	case EMU_OVL_ACTION_SAVE_STATE: {
 		int slot = emu_ovl_get_action_param(&s_overlay);
@@ -2570,6 +2628,10 @@ void emu_frontend_frame(int w, int h) {
 
 	// Shortcut button processing
 	emu_frontend_update_buttons();
+
+	if (process_pending_leaf_save_quit())
+		return;
+
 	if (s_overlayConfigLoaded) {
 		process_fast_forward();
 		process_state_shortcuts();
