@@ -166,6 +166,7 @@ patch: $(PATCH_STAMP)
 
 $(PATCH_STAMP): | clone
 	@if [ ! -f $(PATCH_STAMP) ]; then \
+		set -e; \
 		echo "Applying patches..."; \
 		cd $(SRC)/mupen64plus-ui-console && git apply $(PATCHES)/mupen64plus-ui-console.patch; \
 		if [ -s $(PATCHES)/mupen64plus-audio-sdl.patch ]; then \

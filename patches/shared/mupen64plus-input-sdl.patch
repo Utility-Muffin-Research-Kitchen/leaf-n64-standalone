@@ -1,5 +1,5 @@
 diff --git a/src/plugin.c b/src/plugin.c
-index 974b1db..edaa2c3 100644
+index 974b1db..4e5f38f 100644
 --- a/src/plugin.c
 +++ b/src/plugin.c
 @@ -27,6 +27,7 @@
@@ -32,7 +32,7 @@ index 974b1db..edaa2c3 100644
      for ( b = 0; b < 4; ++b )
      {
          if (controller[b].device >= 0)
-@@ -614,6 +623,149 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
+@@ -614,6 +623,193 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
          controller[Control].buttons.Y_AXIS = iY;
      }
  
@@ -226,3 +226,8 @@ index 974b1db..edaa2c3 100644
      // process mouse events
      mstate = SDL_GetMouseState( NULL, NULL );
      for( b = 0; b < 16; b++ )
+@@ -1092,4 +1288,3 @@ EXPORT void CALL SDL_KeyUp(int keymod, int keysym)
+ {
+     myKeyState[keysym] = 0;
+ }
+-
