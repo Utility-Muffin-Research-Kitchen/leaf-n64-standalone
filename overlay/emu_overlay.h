@@ -22,6 +22,7 @@ typedef enum {
 	EMU_OVL_ACTION_SAVE_STATE,
 	EMU_OVL_ACTION_LOAD_STATE,
 	EMU_OVL_ACTION_QUIT,
+	EMU_OVL_ACTION_SAVE_AND_QUIT,
 	EMU_OVL_ACTION_SAVE_CONSOLE,    // Save Changes -> Save for N64
 	EMU_OVL_ACTION_SAVE_GAME,       // Save Changes -> Save for This Game
 	EMU_OVL_ACTION_RESTORE_DEFAULTS // Save Changes -> Restore Defaults
@@ -92,6 +93,7 @@ typedef struct {
 
 	int current_section;
 	int save_slot;
+	bool quit_save; // Quit row armed to Save & Quit by default
 
 	EmuOvlAction action;
 	int action_param;
@@ -129,5 +131,6 @@ bool emu_ovl_is_active(EmuOvl* ovl);
 EmuOvlAction emu_ovl_get_action(EmuOvl* ovl);
 int emu_ovl_get_action_param(EmuOvl* ovl);
 int emu_ovl_save_slot_screenshot(EmuOvl* ovl, int slot);
+void emu_ovl_render_status(EmuOvl* ovl, const char* message);
 
 #endif

@@ -14,12 +14,15 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <GLES3/gl3.h>
+#include <png.h>
 
 #include <math.h>
+#include <setjmp.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
 // ---------------------------------------------------------------------------
 // GLES3 VAO function pointers — loaded via SDL_GL_GetProcAddress to avoid
@@ -798,7 +801,11 @@ static void ovl_sdl_capture_frame(void) {
 	glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, gl_pixels);
 
 	// Copy into capture surface, flipping vertically and converting RGBA -> ARGB
-	SDL_LockSurface(s_captureSurface);
+	if (SDL_LockSurface(s_captureSurface) != 0) {
+		fprintf(stderr, "[OverlaySDL] SDL_LockSurface failed: %s\n", SDL_GetError());
+		free(gl_pixels);
+		return;
+	}
 	uint8_t* dst_base = (uint8_t*)s_captureSurface->pixels;
 	int dst_pitch = s_captureSurface->pitch;
 
@@ -1318,12 +1325,105 @@ static void ovl_sdl_free_icon(int icon_id) {
 }
 
 // ---------------------------------------------------------------------------
-// save_captured_frame — write captured frame as BMP
+static int path_has_suffix(const char* path, const char* suffix) {
+	size_t path_len;
+	size_t suffix_len;
+	if (!path || !suffix)
+		return 0;
+	path_len = strlen(path);
+	suffix_len = strlen(suffix);
+	return path_len >= suffix_len &&
+		strcmp(path + path_len - suffix_len, suffix) == 0;
+}
+
+static int ovl_sdl_save_captured_frame_png(const char* path) {
+	if (!path || !s_captureSurface)
+		return -1;
+
+	FILE* fp = fopen(path, "wb");
+	if (!fp) {
+		fprintf(stderr, "[OverlaySDL] fopen(%s) failed\n", path);
+		return -1;
+	}
+
+	png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	if (!png) {
+		fclose(fp);
+		return -1;
+	}
+	png_infop info = png_create_info_struct(png);
+	if (!info) {
+		png_destroy_write_struct(&png, NULL);
+		fclose(fp);
+		return -1;
+	}
+	if (setjmp(png_jmpbuf(png))) {
+		png_destroy_write_struct(&png, &info);
+		fclose(fp);
+		unlink(path);
+		return -1;
+	}
+
+	png_init_io(png, fp);
+	png_set_IHDR(png, info, s_captureSurface->w, s_captureSurface->h, 8,
+				 PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
+				 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+	png_write_info(png, info);
+
+	uint8_t* row = (uint8_t*)malloc((size_t)s_captureSurface->w * 4);
+	if (!row) {
+		png_destroy_write_struct(&png, &info);
+		fclose(fp);
+		unlink(path);
+		return -1;
+	}
+
+	if (SDL_LockSurface(s_captureSurface) != 0) {
+		fprintf(stderr, "[OverlaySDL] SDL_LockSurface failed: %s\n", SDL_GetError());
+		free(row);
+		png_destroy_write_struct(&png, &info);
+		fclose(fp);
+		unlink(path);
+		return -1;
+	}
+	for (int y = 0; y < s_captureSurface->h; y++) {
+		uint8_t* src = (uint8_t*)s_captureSurface->pixels +
+					   (size_t)y * (size_t)s_captureSurface->pitch;
+		for (int x = 0; x < s_captureSurface->w; x++) {
+			Uint8 r, g, b, a;
+			Uint32 px;
+			memcpy(&px, src + (size_t)x * 4, sizeof(px));
+			SDL_GetRGBA(px, s_captureSurface->format, &r, &g, &b, &a);
+			row[x * 4 + 0] = r;
+			row[x * 4 + 1] = g;
+			row[x * 4 + 2] = b;
+			row[x * 4 + 3] = a ? a : 255;
+		}
+		png_write_row(png, row);
+	}
+	SDL_UnlockSurface(s_captureSurface);
+
+	free(row);
+	png_write_end(png, NULL);
+	png_destroy_write_struct(&png, &info);
+	fclose(fp);
+	return 0;
+}
+
+// ---------------------------------------------------------------------------
+// save_captured_frame — write captured frame as BMP or PNG
 // ---------------------------------------------------------------------------
 
 static int ovl_sdl_save_captured_frame(const char* path) {
 	if (!path || !s_captureSurface)
 		return -1;
+	if (path_has_suffix(path, ".png")) {
+		if (ovl_sdl_save_captured_frame_png(path) != 0) {
+			fprintf(stderr, "[OverlaySDL] PNG save failed: %s\n", path);
+			return -1;
+		}
+		return 0;
+	}
 	if (SDL_SaveBMP(s_captureSurface, path) != 0) {
 		fprintf(stderr, "[OverlaySDL] SDL_SaveBMP(%s) failed: %s\n", path, SDL_GetError());
 		return -1;

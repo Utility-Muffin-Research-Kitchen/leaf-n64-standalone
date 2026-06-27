@@ -308,6 +308,14 @@ static int find_options_index(EmuOvl* ovl) {
 	return 0;
 }
 
+static const char* main_item_label(EmuOvl* ovl, int index) {
+	if (!ovl || index < 0 || index >= ovl->main_item_count)
+		return "";
+	if (ovl->main_items[index].type == EMU_OVL_MAIN_QUIT)
+		return ovl->quit_save ? "Save & Quit" : "Quit";
+	return ovl->main_items[index].label;
+}
+
 static void cycle_item_next(EmuOvlItem* item) {
 	switch (item->type) {
 	case EMU_OVL_TYPE_BOOL:
@@ -559,6 +567,7 @@ void emu_ovl_open(EmuOvl* ovl) {
 	ovl->action = EMU_OVL_ACTION_NONE;
 	ovl->action_param = 0;
 	ovl->save_slot = 0;
+	ovl->quit_save = true;
 	ovl->scroll_offset = 0;
 	ovl->bind_capture = -1;
 
@@ -585,6 +594,8 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 			} else if (input->right) {
 				ovl->save_slot = (ovl->save_slot + 1) % EMU_OVL_MAX_SLOTS;
 			}
+		} else if (sel_type == EMU_OVL_MAIN_QUIT && (input->left || input->right)) {
+			ovl->quit_save = !ovl->quit_save;
 		}
 		if (input->up) {
 			ovl->selected = (ovl->selected - 1 + ovl->main_item_count) % ovl->main_item_count;
@@ -622,7 +633,7 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 				break;
 			case EMU_OVL_MAIN_QUIT:
 				free_slot_screenshots(ovl);
-				ovl->action = EMU_OVL_ACTION_QUIT;
+				ovl->action = ovl->quit_save ? EMU_OVL_ACTION_SAVE_AND_QUIT : EMU_OVL_ACTION_QUIT;
 				ovl->state = EMU_OVL_STATE_CLOSED;
 				return false;
 			}
@@ -1308,7 +1319,7 @@ static void render_main_menu(EmuOvl* ovl) {
 		int iy = list_y + i * row_h;
 		bool sel = (i == ovl->selected);
 		draw_settings_row(ovl, x, iy, menu_w, row_h,
-						  ovl->main_items[i].label, NULL, sel, false,
+						  main_item_label(ovl, i), NULL, sel, false,
 						  EMU_OVL_FONT_LARGE);
 	}
 
@@ -1345,8 +1356,13 @@ static void render_main_menu(EmuOvl* ovl) {
 		}
 	}
 
-	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Resume", "A", "OK"};
-	draw_footer_hints(ovl, hints, 8);
+	if (sel_type == EMU_OVL_MAIN_CONTINUE) {
+		const char* hints[] = {"UP/DOWN", "Move", "A", "Resume", "B", "Resume"};
+		draw_footer_hints(ovl, hints, 6);
+	} else {
+		const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Resume", "A", "OK"};
+		draw_footer_hints(ovl, hints, 8);
+	}
 }
 
 static void render_section_list(EmuOvl* ovl) {
@@ -1676,4 +1692,19 @@ int emu_ovl_save_slot_screenshot(EmuOvl* ovl, int slot) {
 		write_resume_slot(ovl, slot);
 
 	return ret;
+}
+
+void emu_ovl_render_status(EmuOvl* ovl, const char* message) {
+	if (!ovl || !ovl->render)
+		return;
+
+	EmuOvlRenderBackend* r = ovl->render;
+	r->begin_frame();
+	r->draw_captured_frame(0.42f);
+	draw_menu_bar(ovl, ovl->game_name, ovl->console_name);
+	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_centered_text(r, message && message[0] ? message : "Working...",
+					   ovl->screen_w / 2, (content_top() + content_bottom(ovl)) / 2,
+					   ovl->theme.text, EMU_OVL_FONT_LARGE);
+	r->end_frame();
 }

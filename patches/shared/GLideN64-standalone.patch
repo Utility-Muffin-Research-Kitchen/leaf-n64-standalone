@@ -256,13 +256,14 @@ index ff7e8a52..dc80b32a 100644
  endif(EXISTS "${CMAKE_FIND_ROOT_PATH}/opt/vc/include/bcm_host.h" AND NOT MESA)
  
  if(MUPENPLUSAPI)
-@@ -244,6 +256,9 @@ if(MUPENPLUSAPI)
+@@ -244,6 +256,10 @@ if(MUPENPLUSAPI)
  		-DTXFILTER_LIB
    )
    include_directories( . inc )
 +  include_directories(${OVERLAY_COMMON_DIR})
-+  # SDL2 and SDL_ttf for overlay menu rendering
++  # SDL2, SDL_ttf, and libpng for overlay menu rendering
 +  include_directories(${SDL_TTF_INCLUDE_DIRS})
++  include_directories(${PNG_PNG_INCLUDE_DIR})
    set(GLideN64_SOURCES_UNIX
  	MupenPlusPluginAPI.cpp
  	mupenplus/CommonAPIImpl_mupenplus.cpp
@@ -363,8 +364,8 @@ index ff7e8a52..dc80b32a 100644
    endif(SDL)
  endif(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
  
-+# SDL2 + SDL_ttf for overlay menu rendering (needed regardless of SDL display mode)
-+target_link_libraries(${GLideN64_DLL_NAME} -lSDL2 -lSDL2_ttf)
++# SDL2 + SDL_ttf + libpng for overlay menu rendering and Leaf resume thumbnails
++target_link_libraries(${GLideN64_DLL_NAME} -lSDL2 -lSDL2_ttf -lpng16 -lz)
 +
  if(UNIX AND NOT APPLE AND NOT ANDROID)
  	install(TARGETS ${GLideN64_DLL_NAME}

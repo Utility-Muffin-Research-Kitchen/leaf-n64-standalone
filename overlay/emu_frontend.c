@@ -10,6 +10,8 @@
 #include <sys/ioctl.h>
 #include <SDL2/SDL.h>
 
+#define LEAF_RESUME_STATE_SLOT 99
+
 // Frame skip: owned here, read by GLideN64 RSP.cpp via extern
 int g_frameSkip = 0;
 
@@ -207,6 +209,22 @@ static int build_state_path(int slot, char* path, size_t path_size) {
 	return snprintf(path, path_size, "%s/%s.state%d", dir, stem, slot) >= (int)path_size ? -1 : 0;
 }
 
+static int build_state_thumb_path(int slot, char* path, size_t path_size) {
+	const char* dir = getenv("EMU_OVERLAY_STATE_DIR");
+	const char* stem = getenv("EMU_OVERLAY_STATE_STEM");
+
+	if (!path || path_size == 0)
+		return -1;
+	path[0] = '\0';
+	if (!dir || dir[0] == '\0' || !stem || stem[0] == '\0')
+		return -1;
+	if (slot < 0)
+		return snprintf(path, path_size, "%s/%s.state.auto.png", dir, stem) >= (int)path_size ? -1 : 0;
+	if (slot == 0)
+		return snprintf(path, path_size, "%s/%s.state.png", dir, stem) >= (int)path_size ? -1 : 0;
+	return snprintf(path, path_size, "%s/%s.state%d.png", dir, stem, slot) >= (int)path_size ? -1 : 0;
+}
+
 static int save_state_slot(int slot) {
 	char path[512];
 	int fallback_slot = slot < 0 ? 9 : slot;
@@ -229,6 +247,48 @@ static int load_state_slot(int slot) {
 		return s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, (void*)path);
 	s_coreAPI.core_cmd(M64CMD_STATE_SET_SLOT, fallback_slot, NULL);
 	return s_coreAPI.core_cmd(M64CMD_STATE_LOAD, 0, NULL);
+}
+
+static bool nextui_markers_disabled(void) {
+	const char* value = getenv("EMU_DISABLE_NEXTUI_MARKERS");
+	return value && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+static int wait_for_state_write(int slot) {
+	char path[512];
+	if (build_state_path(slot, path, sizeof(path)) != 0)
+		return -1;
+
+	const int timeout_ms = 8000;
+	const int poll_ms = 100;
+	const int warmup_ms = 800;
+	const int stable_polls = 3;
+	long long last_size = -1;
+	int stable = 0;
+	int elapsed = 0;
+
+	while (elapsed < timeout_ms) {
+		SDL_Delay(poll_ms);
+		elapsed += poll_ms;
+
+		struct stat st;
+		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+			continue;
+		long long size = (long long)st.st_size;
+		if (size != last_size) {
+			stable = 0;
+		} else if (elapsed >= warmup_ms && size > 0 && ++stable >= stable_polls) {
+			sync();
+			fprintf(stderr, "[Overlay] Savestate settled slot=%d bytes=%lld waited_ms=%d\n",
+					slot, size, elapsed);
+			return 0;
+		}
+		last_size = size;
+	}
+
+	fprintf(stderr, "[Overlay] Savestate did not settle slot=%d within %dms\n",
+			slot, timeout_ms);
+	return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -820,7 +880,7 @@ static void handle_sleep(void) {
 	save_state_slot(-1);
 	// Write auto_resume.txt with relative ROM path so game switcher can resume
 	const char* rom_path = getenv("EMU_ROM_PATH");
-	if (rom_path) {
+	if (rom_path && !nextui_markers_disabled()) {
 		FILE* f = fopen("/mnt/SDCARD/.userdata/shared/.minui/auto_resume.txt", "w");
 		if (f) { fprintf(f, "%s", rom_path); fclose(f); }
 	}
@@ -1233,10 +1293,69 @@ static void process_sensitivity_shortcuts(void) {
 // Stop emulation (shared by poweroff and game switcher)
 // ---------------------------------------------------------------------------
 
+typedef struct {
+	const char* message;
+} OverlayStatusCtx;
+
+static void overlay_capture_on_gl_thread(void* ctx) {
+	(void)ctx;
+	if (s_overlay.render && s_overlay.render->capture_frame)
+		s_overlay.render->capture_frame();
+}
+
+static void capture_overlay_frame(void) {
+	if (!s_overlayInitialized || !s_pluginOps.exec_on_video_thread)
+		return;
+	s_pluginOps.exec_on_video_thread(overlay_capture_on_gl_thread, NULL);
+}
+
+static void overlay_status_on_gl_thread(void* ctx) {
+	OverlayStatusCtx* status = (OverlayStatusCtx*)ctx;
+	emu_ovl_render_status(&s_overlay, status ? status->message : NULL);
+	if (s_pluginOps.swap_buffers)
+		s_pluginOps.swap_buffers();
+}
+
+static void render_overlay_status(const char* message) {
+	if (!s_overlayInitialized || !s_pluginOps.exec_on_video_thread)
+		return;
+	OverlayStatusCtx ctx;
+	ctx.message = message;
+	s_pluginOps.exec_on_video_thread(overlay_status_on_gl_thread, &ctx);
+}
+
 static void request_stop(void) {
 	emu_frontend_cleanup();
 	if (s_coreAPI.core_cmd)
 		s_coreAPI.core_cmd(M64CMD_STOP, 0, NULL);
+}
+
+static int save_leaf_resume_thumbnail(void) {
+	char path[512];
+	if (!s_overlayInitialized || !s_overlay.render || !s_overlay.render->save_captured_frame)
+		return -1;
+	if (build_state_thumb_path(LEAF_RESUME_STATE_SLOT, path, sizeof(path)) != 0)
+		return -1;
+	return s_overlay.render->save_captured_frame(path);
+}
+
+static void save_leaf_resume_and_quit(void) {
+	capture_overlay_frame();
+	render_overlay_status("Saving...");
+
+	int save_rc = save_state_slot(LEAF_RESUME_STATE_SLOT);
+	int thumb_rc = save_leaf_resume_thumbnail();
+	if (save_rc == 0)
+		wait_for_state_write(LEAF_RESUME_STATE_SLOT);
+	else
+		fprintf(stderr, "[Overlay] Save & Quit state save failed slot=%d rc=%d; quitting anyway\n",
+				LEAF_RESUME_STATE_SLOT, save_rc);
+	if (thumb_rc != 0)
+		fprintf(stderr, "[Overlay] Save & Quit thumbnail failed slot=%d; quitting anyway\n",
+				LEAF_RESUME_STATE_SLOT);
+
+	render_overlay_status("Quitting...");
+	request_stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,6 +1363,10 @@ static void request_stop(void) {
 // ---------------------------------------------------------------------------
 
 static void trigger_game_switcher(void) {
+	if (nextui_markers_disabled()) {
+		save_leaf_resume_and_quit();
+		return;
+	}
 	save_state_slot(-1);
 	if (s_overlayInitialized)
 		emu_ovl_save_slot_screenshot(&s_overlay, s_currentSlot);
@@ -2388,6 +2511,9 @@ static void handle_overlay_action(EmuOvlAction action) {
 	switch (action) {
 	case EMU_OVL_ACTION_QUIT:
 		request_stop();
+		break;
+	case EMU_OVL_ACTION_SAVE_AND_QUIT:
+		save_leaf_resume_and_quit();
 		break;
 	case EMU_OVL_ACTION_SAVE_STATE: {
 		int slot = emu_ovl_get_action_param(&s_overlay);
