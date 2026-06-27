@@ -100,6 +100,22 @@ static GLint s_savedTex0;
 static GLint s_savedActiveTexUnit;
 static GLint s_savedUnpackAlignment;
 
+// Optional final presentation rotation for devices whose DRM scanout is
+// portrait while the handheld is used in landscape.
+static int s_presentRotation = 0;
+static int s_presentEnabled = 0;
+static int s_presentLogicalW = 0;
+static int s_presentLogicalH = 0;
+static int s_presentPhysicalW = 0;
+static int s_presentPhysicalH = 0;
+static GLuint s_presentFBO = 0;
+static GLuint s_presentColorTex = 0;
+static GLuint s_presentDepthRB = 0;
+static GLuint s_presentProgram = 0;
+static GLint s_presentLocTexture = -1;
+static GLuint s_presentVAO = 0;
+static GLuint s_presentVBO = 0;
+
 // ---------------------------------------------------------------------------
 // Shader sources
 // ---------------------------------------------------------------------------
@@ -171,6 +187,312 @@ static GLuint link_program(GLuint vs, GLuint fs) {
 	return prog;
 }
 
+static int normalize_rotation(int degrees) {
+	degrees %= 360;
+	if (degrees < 0)
+		degrees += 360;
+	switch (degrees) {
+	case 90:
+	case 180:
+	case 270:
+		return degrees;
+	default:
+		return 0;
+	}
+}
+
+static int read_rotation_env(const char* name, int fallback) {
+	const char* value = getenv(name);
+	if (!value || value[0] == '\0')
+		return fallback;
+	char* end = NULL;
+	long parsed = strtol(value, &end, 10);
+	if (end == value)
+		return fallback;
+	return normalize_rotation((int)parsed);
+}
+
+static void present_destroy(void) {
+	if (s_presentVAO && pfn_glDeleteVertexArrays) {
+		pfn_glDeleteVertexArrays(1, &s_presentVAO);
+		s_presentVAO = 0;
+	}
+	if (s_presentVBO) {
+		glDeleteBuffers(1, &s_presentVBO);
+		s_presentVBO = 0;
+	}
+	if (s_presentProgram) {
+		glDeleteProgram(s_presentProgram);
+		s_presentProgram = 0;
+	}
+	if (s_presentColorTex) {
+		glDeleteTextures(1, &s_presentColorTex);
+		s_presentColorTex = 0;
+	}
+	if (s_presentDepthRB) {
+		glDeleteRenderbuffers(1, &s_presentDepthRB);
+		s_presentDepthRB = 0;
+	}
+	if (s_presentFBO) {
+		glDeleteFramebuffers(1, &s_presentFBO);
+		s_presentFBO = 0;
+	}
+	s_presentEnabled = 0;
+	s_presentRotation = 0;
+	s_presentLogicalW = 0;
+	s_presentLogicalH = 0;
+	s_presentPhysicalW = 0;
+	s_presentPhysicalH = 0;
+	s_presentLocTexture = -1;
+}
+
+static int present_build_program(void) {
+	if (s_presentProgram)
+		return 0;
+
+	GLuint vs = compile_shader(GL_VERTEX_SHADER, s_texVS);
+	GLuint fs = compile_shader(GL_FRAGMENT_SHADER, s_texFS);
+	if (!vs || !fs) {
+		if (vs)
+			glDeleteShader(vs);
+		if (fs)
+			glDeleteShader(fs);
+		return -1;
+	}
+	s_presentProgram = link_program(vs, fs);
+	glDeleteShader(vs);
+	glDeleteShader(fs);
+	if (!s_presentProgram)
+		return -1;
+	s_presentLocTexture = glGetUniformLocation(s_presentProgram, "uTexture");
+	return 0;
+}
+
+static void present_vertices(float* v, int rotation) {
+	float bl_u = 0.0f, bl_v = 0.0f;
+	float br_u = 1.0f, br_v = 0.0f;
+	float tl_u = 0.0f, tl_v = 1.0f;
+	float tr_u = 1.0f, tr_v = 1.0f;
+
+	switch (rotation) {
+	case 90:
+		bl_u = 1.0f; bl_v = 0.0f;
+		br_u = 1.0f; br_v = 1.0f;
+		tl_u = 0.0f; tl_v = 0.0f;
+		tr_u = 0.0f; tr_v = 1.0f;
+		break;
+	case 180:
+		bl_u = 1.0f; bl_v = 1.0f;
+		br_u = 0.0f; br_v = 1.0f;
+		tl_u = 1.0f; tl_v = 0.0f;
+		tr_u = 0.0f; tr_v = 0.0f;
+		break;
+	case 270:
+		bl_u = 0.0f; bl_v = 1.0f;
+		br_u = 0.0f; br_v = 0.0f;
+		tl_u = 1.0f; tl_v = 1.0f;
+		tr_u = 1.0f; tr_v = 0.0f;
+		break;
+	default:
+		break;
+	}
+
+	float verts[24] = {
+		-1.0f, -1.0f, bl_u, bl_v,
+		 1.0f, -1.0f, br_u, br_v,
+		-1.0f,  1.0f, tl_u, tl_v,
+		 1.0f, -1.0f, br_u, br_v,
+		 1.0f,  1.0f, tr_u, tr_v,
+		-1.0f,  1.0f, tl_u, tl_v,
+	};
+	memcpy(v, verts, sizeof(verts));
+}
+
+void overlay_sdl_present_init(int logical_w, int logical_h) {
+	ovl_load_gl3_procs();
+
+	int rotation = read_rotation_env("MUPEN64PLUS_PRESENT_ROTATION",
+									 read_rotation_env("DISPLAY_ROTATION", 0));
+	if (rotation == 0 || logical_w <= 0 || logical_h <= 0) {
+		present_destroy();
+		return;
+	}
+
+	if (s_presentEnabled &&
+		s_presentRotation == rotation &&
+		s_presentLogicalW == logical_w &&
+		s_presentLogicalH == logical_h)
+		return;
+
+	present_destroy();
+
+	s_presentRotation = rotation;
+	s_presentLogicalW = logical_w;
+	s_presentLogicalH = logical_h;
+	if (rotation == 90 || rotation == 270) {
+		s_presentPhysicalW = logical_h;
+		s_presentPhysicalH = logical_w;
+	} else {
+		s_presentPhysicalW = logical_w;
+		s_presentPhysicalH = logical_h;
+	}
+
+	GLint savedFBO = 0, savedVAO = 0, savedVBO = 0, savedTex = 0;
+	GLint savedUnpackAlign = 4;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
+	if (pfn_glBindVertexArray)
+		pfn_glBindVertexArray(0);
+	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVBO);
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex);
+	glGetIntegerv(GL_UNPACK_ALIGNMENT, &savedUnpackAlign);
+
+	if (present_build_program() != 0) {
+		fprintf(stderr, "[OverlaySDL] presentation shader init failed; rotation disabled\n");
+		glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)savedFBO);
+		glBindBuffer(GL_ARRAY_BUFFER, (GLuint)savedVBO);
+		glBindTexture(GL_TEXTURE_2D, (GLuint)savedTex);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, savedUnpackAlign);
+		return;
+	}
+
+	glGenTextures(1, &s_presentColorTex);
+	glBindTexture(GL_TEXTURE_2D, s_presentColorTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, logical_w, logical_h, 0,
+				 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+	glGenRenderbuffers(1, &s_presentDepthRB);
+	glBindRenderbuffer(GL_RENDERBUFFER, s_presentDepthRB);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, logical_w, logical_h);
+
+	glGenFramebuffers(1, &s_presentFBO);
+	glBindFramebuffer(GL_FRAMEBUFFER, s_presentFBO);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+						   GL_TEXTURE_2D, s_presentColorTex, 0);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+							  GL_RENDERBUFFER, s_presentDepthRB);
+
+	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) {
+		fprintf(stderr, "[OverlaySDL] presentation FBO incomplete: 0x%x; rotation disabled\n",
+				(unsigned int)status);
+		present_destroy();
+		glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)savedFBO);
+		glBindBuffer(GL_ARRAY_BUFFER, (GLuint)savedVBO);
+		glBindTexture(GL_TEXTURE_2D, (GLuint)savedTex);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, savedUnpackAlign);
+		return;
+	}
+
+	pfn_glGenVertexArrays(1, &s_presentVAO);
+	glGenBuffers(1, &s_presentVBO);
+	pfn_glBindVertexArray(s_presentVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, s_presentVBO);
+	glBufferData(GL_ARRAY_BUFFER, 6 * 4 * (GLsizeiptr)sizeof(float), NULL, GL_DYNAMIC_DRAW);
+	GLint posLoc = glGetAttribLocation(s_presentProgram, "aPos");
+	GLint uvLoc = glGetAttribLocation(s_presentProgram, "aTexCoord");
+	glEnableVertexAttribArray(posLoc);
+	glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, 4 * (GLsizei)sizeof(float), (void*)0);
+	glEnableVertexAttribArray(uvLoc);
+	glVertexAttribPointer(uvLoc, 2, GL_FLOAT, GL_FALSE, 4 * (GLsizei)sizeof(float),
+						  (void*)(2 * sizeof(float)));
+
+	glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)savedFBO);
+	pfn_glBindVertexArray((GLuint)savedVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, (GLuint)savedVBO);
+	glBindTexture(GL_TEXTURE_2D, (GLuint)savedTex);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, savedUnpackAlign);
+
+	s_presentEnabled = 1;
+	fprintf(stderr, "[OverlaySDL] presentation rotation=%d logical=%dx%d physical=%dx%d\n",
+			s_presentRotation, s_presentLogicalW, s_presentLogicalH,
+			s_presentPhysicalW, s_presentPhysicalH);
+}
+
+void overlay_sdl_present_bind_target(void) {
+	if (!s_presentEnabled)
+		return;
+	glBindFramebuffer(GL_FRAMEBUFFER, s_presentFBO);
+	glViewport(0, 0, s_presentLogicalW, s_presentLogicalH);
+}
+
+void overlay_sdl_present_swap(OverlaySdlSwapFn swap_fn) {
+	if (!swap_fn)
+		return;
+	if (!s_presentEnabled) {
+		swap_fn();
+		return;
+	}
+
+	GLint savedFramebuffer = 0;
+	GLint savedViewport[4] = {0, 0, 0, 0};
+	GLint savedProgram = 0;
+	GLint savedVAO = 0;
+	GLint savedVBO = 0;
+	GLint savedTex = 0;
+	GLint savedActiveTexUnit = 0;
+	GLint savedBlendSrcRGB = GL_ONE, savedBlendDstRGB = GL_ZERO;
+	GLint savedBlendSrcAlpha = GL_ONE, savedBlendDstAlpha = GL_ZERO;
+	GLboolean savedBlend = glIsEnabled(GL_BLEND);
+	GLboolean savedDepth = glIsEnabled(GL_DEPTH_TEST);
+	GLboolean savedCull = glIsEnabled(GL_CULL_FACE);
+	GLboolean savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFramebuffer);
+	glGetIntegerv(GL_VIEWPORT, savedViewport);
+	glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+	glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVAO);
+	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVBO);
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexUnit);
+	glActiveTexture(GL_TEXTURE0);
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex);
+	glGetIntegerv(GL_BLEND_SRC_RGB, &savedBlendSrcRGB);
+	glGetIntegerv(GL_BLEND_DST_RGB, &savedBlendDstRGB);
+	glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrcAlpha);
+	glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDstAlpha);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0, 0, s_presentPhysicalW, s_presentPhysicalH);
+	glDisable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_SCISSOR_TEST);
+	glUseProgram(s_presentProgram);
+	pfn_glBindVertexArray(s_presentVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, s_presentVBO);
+
+	float verts[24];
+	present_vertices(verts, s_presentRotation);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, s_presentColorTex);
+	if (s_presentLocTexture >= 0)
+		glUniform1i(s_presentLocTexture, 0);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+
+	swap_fn();
+
+	glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)savedFramebuffer);
+	glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+	if (savedBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+	if (savedDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+	if (savedCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+	if (savedScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+	glBlendFuncSeparate((GLenum)savedBlendSrcRGB, (GLenum)savedBlendDstRGB,
+						(GLenum)savedBlendSrcAlpha, (GLenum)savedBlendDstAlpha);
+	glUseProgram((GLuint)savedProgram);
+	pfn_glBindVertexArray((GLuint)savedVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, (GLuint)savedVBO);
+	glBindTexture(GL_TEXTURE_2D, (GLuint)savedTex);
+	glActiveTexture((GLenum)savedActiveTexUnit);
+
+	overlay_sdl_present_bind_target();
+}
+
 // ---------------------------------------------------------------------------
 // init / destroy
 // ---------------------------------------------------------------------------
@@ -209,6 +531,22 @@ static int ovl_sdl_init(int screen_w, int screen_h) {
 
 	int font_sizes[EMU_OVL_FONT_COUNT] = {
 		FONT_SIZE_LARGE, FONT_SIZE_MEDIUM, FONT_SIZE_SMALL, FONT_SIZE_TINY};
+	const char* bump_env = getenv("CAT_FONT_BUMP");
+	if (bump_env && bump_env[0] != '\0') {
+		char* end = NULL;
+		long bump = strtol(bump_env, &end, 10);
+		if (end != bump_env) {
+			if (bump < -8)
+				bump = -8;
+			if (bump > 12)
+				bump = 12;
+			for (int i = 0; i < EMU_OVL_FONT_COUNT; i++) {
+				font_sizes[i] += (int)bump;
+				if (font_sizes[i] < 8)
+					font_sizes[i] = 8;
+			}
+		}
+	}
 	for (int i = 0; i < EMU_OVL_FONT_COUNT; i++) {
 		s_fonts[i] = TTF_OpenFont(font_path, font_sizes[i]);
 		if (!s_fonts[i]) {
@@ -320,6 +658,8 @@ static int ovl_sdl_init(int screen_w, int screen_h) {
 }
 
 static void ovl_sdl_destroy(void) {
+	present_destroy();
+
 	for (int i = 0; i < EMU_OVL_FONT_COUNT; i++) {
 		if (s_fonts[i]) {
 			TTF_CloseFont(s_fonts[i]);

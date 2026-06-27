@@ -52,6 +52,20 @@ typedef struct {
 	EmuOvlMainItemType type;
 } EmuOvlMainItem;
 
+typedef struct {
+	uint32_t panel;
+	uint32_t panel_strong;
+	uint32_t text;
+	uint32_t hint;
+	uint32_t highlight;
+	uint32_t highlighted_text;
+	uint32_t button_glyph_bg;
+	uint32_t button_label;
+	uint32_t preview_bg;
+	float pill_radius_ratio;
+	bool show_hints;
+} EmuOvlTheme;
+
 // Callbacks for the dynamic cheats menu (set by the host after emu_ovl_init)
 typedef struct {
 	const char* (*get_name)(int index);
@@ -88,6 +102,7 @@ typedef struct {
 	char game_name[256];
 	int screen_w;
 	int screen_h;
+	EmuOvlTheme theme;
 
 	// Button hint icons (icon_id from render->load_icon, -1 = not loaded)
 	int icon_a;

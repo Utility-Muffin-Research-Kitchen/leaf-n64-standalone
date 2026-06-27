@@ -22,6 +22,136 @@ static int ovl_padding = 10;
 // Helpers
 // ---------------------------------------------------------------------------
 
+static uint32_t color_with_alpha(uint32_t color, unsigned int alpha) {
+	if (alpha > 255)
+		alpha = 255;
+	return (color & 0x00FFFFFFu) | ((uint32_t)alpha << 24);
+}
+
+static int hex_nibble(char c) {
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return 10 + c - 'a';
+	if (c >= 'A' && c <= 'F')
+		return 10 + c - 'A';
+	return -1;
+}
+
+static bool parse_theme_color(const char* value, uint32_t* out) {
+	if (!value || !out)
+		return false;
+	if (value[0] == '#')
+		value++;
+	size_t len = strlen(value);
+	if (len != 6 && len != 8)
+		return false;
+
+	uint32_t n = 0;
+	for (size_t i = 0; i < len; i++) {
+		int v = hex_nibble(value[i]);
+		if (v < 0)
+			return false;
+		n = (n << 4) | (uint32_t)v;
+	}
+	if (len == 6) {
+		*out = 0xFF000000u | n;
+	} else {
+		uint32_t rgb = n >> 8;
+		uint32_t a = n & 0xFFu;
+		*out = (a << 24) | rgb;
+	}
+	return true;
+}
+
+static int color_luma(uint32_t color) {
+	int r = (int)((color >> 16) & 0xFF);
+	int g = (int)((color >> 8) & 0xFF);
+	int b = (int)(color & 0xFF);
+	return (r * 299 + g * 587 + b * 114) / 1000;
+}
+
+static uint32_t derive_highlighted_text(uint32_t background, uint32_t text,
+										uint32_t highlight) {
+	int hl_lum = color_luma(highlight);
+	int text_lum = color_luma(text);
+	int bg_lum = color_luma(background);
+	if (hl_lum > 140)
+		return (text_lum < bg_lum) ? text : background;
+	return (text_lum > bg_lum) ? text : background;
+}
+
+static bool parse_theme_bool(const char* value, bool fallback) {
+	if (!value || value[0] == '\0')
+		return fallback;
+	if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0 ||
+		strcmp(value, "FALSE") == 0 || strcmp(value, "off") == 0 ||
+		strcmp(value, "OFF") == 0)
+		return false;
+	return true;
+}
+
+static float parse_theme_float(const char* value, float fallback,
+							   float min_value, float max_value) {
+	if (!value || value[0] == '\0')
+		return fallback;
+	char* end = NULL;
+	float parsed = strtof(value, &end);
+	if (end == value)
+		return fallback;
+	if (parsed < min_value)
+		parsed = min_value;
+	if (parsed > max_value)
+		parsed = max_value;
+	return parsed;
+}
+
+static void load_theme(EmuOvl* ovl) {
+	EmuOvlTheme theme;
+	theme.panel = EMU_OVL_COLOR_PANEL;
+	theme.panel_strong = EMU_OVL_COLOR_PANEL_STRONG;
+	theme.text = EMU_OVL_COLOR_TEXT;
+	theme.hint = EMU_OVL_COLOR_HINT;
+	theme.highlight = EMU_OVL_COLOR_HIGHLIGHT;
+	theme.highlighted_text = EMU_OVL_COLOR_HIGHLIGHT_TEXT;
+	theme.button_glyph_bg = EMU_OVL_COLOR_HIGHLIGHT;
+	theme.button_label = EMU_OVL_COLOR_HIGHLIGHT_TEXT;
+	theme.preview_bg = EMU_OVL_COLOR_PREVIEW_BG;
+	theme.pill_radius_ratio = 1.0f;
+	theme.show_hints = true;
+
+	uint32_t background = 0xFF0F160Eu;
+	uint32_t parsed = 0;
+	if (parse_theme_color(getenv("CAT_COLOR_BACKGROUND"), &parsed))
+		background = parsed;
+	if (parse_theme_color(getenv("CAT_COLOR_TEXT"), &parsed))
+		theme.text = parsed;
+	if (parse_theme_color(getenv("CAT_COLOR_HINT"), &parsed))
+		theme.hint = parsed;
+	if (parse_theme_color(getenv("CAT_COLOR_HIGHLIGHT"), &parsed))
+		theme.highlight = parsed;
+	else if (parse_theme_color(getenv("CAT_COLOR_ACCENT"), &parsed))
+		theme.highlight = parsed;
+
+	theme.panel = color_with_alpha(background, 200);
+	theme.panel_strong = color_with_alpha(background, 230);
+	theme.highlighted_text = derive_highlighted_text(background, theme.text, theme.highlight);
+	theme.button_glyph_bg = theme.highlight;
+	theme.button_label = theme.highlighted_text;
+
+	if (parse_theme_color(getenv("CAT_COLOR_BUTTON_GLYPH_BG"), &parsed))
+		theme.button_glyph_bg = parsed;
+	if (parse_theme_color(getenv("CAT_COLOR_BUTTON_LABEL"), &parsed))
+		theme.button_label = parsed;
+	if (parse_theme_color(getenv("CAT_COLOR_HIGHLIGHTED_TEXT"), &parsed))
+		theme.highlighted_text = parsed;
+
+	theme.show_hints = parse_theme_bool(getenv("CAT_SHOW_HINTS"), true);
+	theme.pill_radius_ratio = parse_theme_float(getenv("CAT_PILL_RADIUS_RATIO"), 1.0f, 0.0f, 1.0f);
+
+	ovl->theme = theme;
+}
+
 static void build_main_menu(EmuOvl* ovl) {
 	int n = 0;
 
@@ -246,6 +376,7 @@ int emu_ovl_init(EmuOvl* ovl, EmuOvlConfig* cfg, EmuOvlRenderBackend* render,
 	ovl->action = EMU_OVL_ACTION_NONE;
 	ovl->screen_w = screen_w;
 	ovl->screen_h = screen_h;
+	load_theme(ovl);
 
 	if (game_name)
 		snprintf(ovl->game_name, sizeof(ovl->game_name), "%s", game_name);
@@ -560,12 +691,24 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 // Rendering — Jawaka in-game menu style.
 // ---------------------------------------------------------------------------
 
-// Pill-shaped rounded rect (radius = height/2). Delegates to the backend's
-// anti-aliased draw_rounded_rect implementation.
-static void draw_pill(EmuOvlRenderBackend* r, int x, int y, int w, int h,
-					  uint32_t color) {
+static int apply_radius_ratio(const EmuOvl* ovl, int base_radius, int w, int h) {
+	float ratio = ovl ? ovl->theme.pill_radius_ratio : 1.0f;
+	int radius = (int)((float)base_radius * ratio + 0.5f);
+	if (radius > h / 2)
+		radius = h / 2;
+	if (radius > w / 2)
+		radius = w / 2;
+	if (radius < 0)
+		radius = 0;
+	return radius;
+}
+
+// Pill-shaped rounded rect. Delegates to the backend's anti-aliased
+// draw_rounded_rect implementation.
+static void draw_pill(EmuOvl* ovl, int x, int y, int w, int h, uint32_t color) {
+	EmuOvlRenderBackend* r = ovl->render;
 	if (r->draw_rounded_rect)
-		r->draw_rounded_rect(x, y, w, h, h / 2, color);
+		r->draw_rounded_rect(x, y, w, h, apply_radius_ratio(ovl, h / 2, w, h), color);
 	else
 		r->draw_rect(x, y, w, h, color);
 }
@@ -595,7 +738,8 @@ static void draw_panel(EmuOvl* ovl, int x, int y, int w, int h, uint32_t color) 
 	if (w <= 0 || h <= 0)
 		return;
 	if (r->draw_rounded_rect)
-		r->draw_rounded_rect(x, y, w, h, S(PANEL_RADIUS), color);
+		r->draw_rounded_rect(x, y, w, h,
+							  apply_radius_ratio(ovl, S(PANEL_RADIUS), w, h), color);
 	else
 		r->draw_rect(x, y, w, h, color);
 }
@@ -603,7 +747,7 @@ static void draw_panel(EmuOvl* ovl, int x, int y, int w, int h, uint32_t color) 
 static void draw_content_panel(EmuOvl* ovl, int top, int bottom) {
 	int x = PADDING_PX + S(8);
 	int w = ovl->screen_w - x * 2;
-	draw_panel(ovl, x, top, w, bottom - top, EMU_OVL_COLOR_PANEL);
+	draw_panel(ovl, x, top, w, bottom - top, ovl->theme.panel);
 }
 
 // Compute vertically centered list_y for n items, reserving space for the
@@ -661,7 +805,7 @@ static void draw_menu_bar(EmuOvl* ovl, const char* title) {
 	int panel_h = title_h + S(20);
 	draw_content_panel(ovl, panel_y, panel_y + panel_h);
 	r->draw_text(display, content_x(), panel_y + (panel_h - title_h) / 2,
-				 EMU_OVL_COLOR_TEXT, EMU_OVL_FONT_LARGE);
+				 ovl->theme.text, EMU_OVL_FONT_LARGE);
 }
 
 // Map a button name to its icon handle, or -1 if no icon loaded
@@ -695,12 +839,12 @@ static int draw_button_glyph(EmuOvl* ovl, const char* btn, int gx, int gy,
 	EmuOvlRenderBackend* r = ovl->render;
 	if (strlen(btn) == 1) {
 		// Jawaka footer glyph: accent circle with light text.
-		draw_pill(r, gx, gy, btn_inner_h, btn_inner_h, EMU_OVL_COLOR_HIGHLIGHT);
+		draw_pill(ovl, gx, gy, btn_inner_h, btn_inner_h, ovl->theme.button_glyph_bg);
 		int tw = r->text_width(btn, EMU_OVL_FONT_MEDIUM);
 		int th = r->text_height(EMU_OVL_FONT_MEDIUM);
 		r->draw_text(btn, gx + (btn_inner_h - tw) / 2,
 					 gy + (btn_inner_h - th) / 2,
-					 EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_MEDIUM);
+					 ovl->theme.button_label, EMU_OVL_FONT_MEDIUM);
 		return btn_inner_h;
 	}
 	// PNG icon path for special hints (d-pad)
@@ -712,10 +856,10 @@ static int draw_button_glyph(EmuOvl* ovl, const char* btn, int gx, int gy,
 	// Multi-char inner pill.
 	int tw = r->text_width(btn, EMU_OVL_FONT_TINY);
 	int w = btn_inner_h / 2 + tw;
-	draw_pill(r, gx, gy, w, btn_inner_h, EMU_OVL_COLOR_HIGHLIGHT);
+	draw_pill(ovl, gx, gy, w, btn_inner_h, ovl->theme.button_glyph_bg);
 	int th = r->text_height(EMU_OVL_FONT_TINY);
 	r->draw_text(btn, gx + btn_inner_h / 4, gy + (btn_inner_h - th) / 2,
-				 EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_TINY);
+				 ovl->theme.button_label, EMU_OVL_FONT_TINY);
 	return w;
 }
 
@@ -745,7 +889,7 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 	int y = ovl->screen_h - PADDING_PX - pill_h;
 
 	// Outer theme-coloured pill, matching Jawaka's footer underlay.
-	draw_pill(r, x, y, group_w, pill_h, EMU_OVL_COLOR_PANEL);
+	draw_pill(ovl, x, y, group_w, pill_h, ovl->theme.panel);
 
 	// Pass 2: draw contents. Start at x + BM, advance by (pair_w + BM) per pair.
 	int cx = x + bm;
@@ -757,7 +901,7 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 		int label_w = 0;
 		if (i + 1 < hint_count) {
 			r->draw_text(hints[i + 1], label_x, text_y,
-						 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_SMALL);
+						 ovl->theme.hint, EMU_OVL_FONT_SMALL);
 			label_w = r->text_width(hints[i + 1], EMU_OVL_FONT_SMALL);
 		}
 		// pair_w = gw + bm + label_w + bm; advance by pair_w + bm
@@ -777,6 +921,9 @@ static bool is_nav_hint(const char* btn) {
 // Draw the full bottom hint row, splitting navigation hints left and actions
 // right like Jawaka's in-game footer.
 static void draw_footer_hints(EmuOvl* ovl, const char* hints[], int hint_count) {
+	if (!ovl->theme.show_hints)
+		return;
+
 	const char* left[16];
 	const char* right[16];
 	int left_count = 0;
@@ -809,11 +956,11 @@ static void draw_settings_row(EmuOvl* ovl, int x, int y, int w, int h,
 	int row_pad = S(BUTTON_PADDING);
 
 	if (selected) {
-		draw_pill(r, x - S(10), y + S(2), w, h - S(4), EMU_OVL_COLOR_HIGHLIGHT);
+		draw_pill(ovl, x - S(10), y + S(2), w, h - S(4), ovl->theme.highlight);
 		if (value) {
 			int text_y_pos = y + (h - r->text_height(label_font)) / 2;
 			r->draw_text(label, x + row_pad, text_y_pos,
-						 EMU_OVL_COLOR_HIGHLIGHT_TEXT, label_font);
+						 ovl->theme.highlighted_text, label_font);
 
 			char display[192];
 			if (cycleable)
@@ -824,23 +971,23 @@ static void draw_settings_row(EmuOvl* ovl, int x, int y, int w, int h,
 			int vw = r->text_width(display, EMU_OVL_FONT_TINY);
 			int val_x = x + w - row_pad - vw;
 			int val_y = y + (h - r->text_height(EMU_OVL_FONT_TINY)) / 2;
-			r->draw_text(display, val_x, val_y, EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_TINY);
+			r->draw_text(display, val_x, val_y, ovl->theme.highlighted_text, EMU_OVL_FONT_TINY);
 		} else {
 			int text_y_pos = y + (h - r->text_height(label_font)) / 2;
 			r->draw_text(label, x + row_pad, text_y_pos,
-						 EMU_OVL_COLOR_HIGHLIGHT_TEXT, label_font);
+						 ovl->theme.highlighted_text, label_font);
 		}
 	} else {
 		// Unselected: the underlay guarantees contrast over the paused frame.
 		int text_y_pos = y + (h - r->text_height(label_font)) / 2;
 		r->draw_text(label, x + row_pad, text_y_pos,
-					 EMU_OVL_COLOR_TEXT, label_font);
+					 ovl->theme.text, label_font);
 
 		if (value) {
 			int vw = r->text_width(value, EMU_OVL_FONT_TINY);
 			int val_x = x + w - row_pad - vw;
 			int val_y = y + (h - r->text_height(EMU_OVL_FONT_TINY)) / 2;
-			r->draw_text(value, val_x, val_y, EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
+			r->draw_text(value, val_x, val_y, ovl->theme.hint, EMU_OVL_FONT_TINY);
 		}
 	}
 }
@@ -888,14 +1035,14 @@ static void render_main_menu(EmuOvl* ovl) {
 		if (pv_h > max_h)
 			pv_h = max_h;
 		int pv_y = list_y;
-		draw_panel(ovl, pv_x, pv_y, pv_w, pv_h, EMU_OVL_COLOR_PREVIEW_BG);
+		draw_panel(ovl, pv_x, pv_y, pv_w, pv_h, ovl->theme.preview_bg);
 		int icon_id = ovl->slot_icons[ovl->save_slot];
 		if (icon_id >= 0 && r->draw_icon) {
 			r->draw_icon(icon_id, pv_x, pv_y);
 		} else {
 			draw_centered_text(r, "No save in this slot",
 							   pv_x + pv_w / 2, pv_y + pv_h / 2,
-							   EMU_OVL_COLOR_HIGHLIGHT_TEXT, EMU_OVL_FONT_SMALL);
+							   ovl->theme.text, EMU_OVL_FONT_SMALL);
 		}
 
 		int dot_spacing = S(15);
@@ -905,9 +1052,9 @@ static void render_main_menu(EmuOvl* ovl) {
 		for (int i = 0; i < EMU_OVL_MAX_SLOTS; i++) {
 			int dx = dots_x + i * dot_spacing;
 			if (i == ovl->save_slot) {
-				draw_pill(r, dx, dots_y, S(6), S(6), EMU_OVL_COLOR_HIGHLIGHT);
+				draw_pill(ovl, dx, dots_y, S(6), S(6), ovl->theme.highlight);
 			} else {
-				draw_pill(r, dx + S(2), dots_y + S(2), S(2), S(2), EMU_OVL_COLOR_HINT);
+				draw_pill(ovl, dx + S(2), dots_y + S(2), S(2), S(2), ovl->theme.hint);
 			}
 		}
 	}
@@ -959,7 +1106,7 @@ static void render_section_list(EmuOvl* ovl) {
 		int tw = r->text_width(ovl->config->options_hint, EMU_OVL_FONT_TINY);
 		r->draw_text(ovl->config->options_hint,
 					 (ovl->screen_w - tw) / 2, hint_y,
-					 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
+					 ovl->theme.hint, EMU_OVL_FONT_TINY);
 	}
 
 	const char* hints[] = {"UP/DOWN", "Move", "B", "Back", "A", "Open"};
@@ -1075,7 +1222,7 @@ static void render_section_items(EmuOvl* ovl) {
 			int tw = r->text_width(sel_item->description, EMU_OVL_FONT_TINY);
 			r->draw_text(sel_item->description,
 						 (ovl->screen_w - tw) / 2, desc_cy,
-						 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
+						 ovl->theme.hint, EMU_OVL_FONT_TINY);
 		}
 	}
 
@@ -1092,7 +1239,7 @@ static void render_cheats(EmuOvl* ovl) {
 
 	if (count == 0) {
 		draw_centered_text(r, "No cheats available", ovl->screen_w / 2,
-						   ovl->screen_h / 2, EMU_OVL_COLOR_HINT, EMU_OVL_FONT_SMALL);
+						   ovl->screen_h / 2, ovl->theme.hint, EMU_OVL_FONT_SMALL);
 		const char* hints[] = {"B", "Back"};
 		draw_footer_hints(ovl, hints, 2);
 		return;
@@ -1132,7 +1279,7 @@ static void render_cheats(EmuOvl* ovl) {
 	if (desc && desc[0] != '\0') {
 		int tw = r->text_width(desc, EMU_OVL_FONT_TINY);
 		r->draw_text(desc, (ovl->screen_w - tw) / 2, desc_cy,
-					 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
+					 ovl->theme.hint, EMU_OVL_FONT_TINY);
 	}
 
 	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Back"};
@@ -1158,7 +1305,7 @@ static void render_save_changes(EmuOvl* ovl) {
 	const char* desc = scope_label(ovl->scope);
 	int desc_y = content_top() + S(12);
 	r->draw_text(desc, content_x() + S(BUTTON_PADDING), desc_y,
-				 EMU_OVL_COLOR_HINT, EMU_OVL_FONT_TINY);
+				 ovl->theme.hint, EMU_OVL_FONT_TINY);
 
 	// 3 rows: Save for Console, Save for Game, Restore Defaults
 	static const char* items[] = {
