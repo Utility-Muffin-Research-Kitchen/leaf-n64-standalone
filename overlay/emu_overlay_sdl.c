@@ -62,6 +62,9 @@ static int s_scale = 2;
 
 static int s_screenW = 0;
 static int s_screenH = 0;
+static int s_overlayRotation = 0;
+static int s_overlayViewportW = 0;
+static int s_overlayViewportH = 0;
 
 static TTF_Font* s_fonts[EMU_OVL_FONT_COUNT] = {NULL, NULL, NULL, NULL}; // LARGE, MEDIUM, SMALL, TINY
 
@@ -308,6 +311,47 @@ static void present_vertices(float* v, int rotation) {
 	memcpy(v, verts, sizeof(verts));
 }
 
+static void overlay_vertices(float* v, int rotation) {
+	// Overlay surfaces are SDL top-down, so the default mapping already flips V.
+	float bl_u = 0.0f, bl_v = 1.0f;
+	float br_u = 1.0f, br_v = 1.0f;
+	float tl_u = 0.0f, tl_v = 0.0f;
+	float tr_u = 1.0f, tr_v = 0.0f;
+
+	switch (rotation) {
+	case 90:
+		bl_u = 1.0f; bl_v = 1.0f;
+		br_u = 1.0f; br_v = 0.0f;
+		tl_u = 0.0f; tl_v = 1.0f;
+		tr_u = 0.0f; tr_v = 0.0f;
+		break;
+	case 180:
+		bl_u = 1.0f; bl_v = 0.0f;
+		br_u = 0.0f; br_v = 0.0f;
+		tl_u = 1.0f; tl_v = 1.0f;
+		tr_u = 0.0f; tr_v = 1.0f;
+		break;
+	case 270:
+		bl_u = 0.0f; bl_v = 0.0f;
+		br_u = 0.0f; br_v = 1.0f;
+		tl_u = 1.0f; tl_v = 0.0f;
+		tr_u = 1.0f; tr_v = 1.0f;
+		break;
+	default:
+		break;
+	}
+
+	float verts[24] = {
+		-1.0f, -1.0f, bl_u, bl_v,
+		 1.0f, -1.0f, br_u, br_v,
+		-1.0f,  1.0f, tl_u, tl_v,
+		 1.0f, -1.0f, br_u, br_v,
+		 1.0f,  1.0f, tr_u, tr_v,
+		-1.0f,  1.0f, tl_u, tl_v,
+	};
+	memcpy(v, verts, sizeof(verts));
+}
+
 void overlay_sdl_present_init(int logical_w, int logical_h) {
 	ovl_load_gl3_procs();
 
@@ -508,6 +552,19 @@ static int ovl_sdl_init(int screen_w, int screen_h) {
 	ovl_load_gl3_procs();
 	s_screenW = screen_w;
 	s_screenH = screen_h;
+	s_overlayRotation = read_rotation_env("MUPEN64PLUS_OVERLAY_ROTATION", 0);
+	if (s_overlayRotation == 90 || s_overlayRotation == 270) {
+		s_overlayViewportW = screen_h;
+		s_overlayViewportH = screen_w;
+	} else {
+		s_overlayViewportW = screen_w;
+		s_overlayViewportH = screen_h;
+	}
+	if (s_overlayRotation != 0) {
+		fprintf(stderr, "[OverlaySDL] overlay rotation=%d logical=%dx%d physical=%dx%d\n",
+				s_overlayRotation, s_screenW, s_screenH,
+				s_overlayViewportW, s_overlayViewportH);
+	}
 
 	// Scale factor: match NextUI's FIXED_SCALE
 	// Brick (1024x768) = 3x, Smart Pro / TG5050 (1280x720) = 2x
@@ -721,8 +778,8 @@ static void ovl_sdl_capture_frame(void) {
 	if (!s_captureSurface)
 		return;
 
-	int w = s_screenW;
-	int h = s_screenH;
+	int w = s_overlayViewportW > 0 ? s_overlayViewportW : s_screenW;
+	int h = s_overlayViewportH > 0 ? s_overlayViewportH : s_screenH;
 
 	// Temporary buffer for glReadPixels (RGBA, bottom-up)
 	size_t row_bytes = (size_t)w * 4;
@@ -737,15 +794,17 @@ static void ovl_sdl_capture_frame(void) {
 	uint8_t* dst_base = (uint8_t*)s_captureSurface->pixels;
 	int dst_pitch = s_captureSurface->pitch;
 
-	for (int y = 0; y < h; y++) {
+	for (int y = 0; y < s_screenH; y++) {
 		// GL row 0 is bottom, SDL row 0 is top => flip
-		const uint8_t* src_row = gl_pixels + (size_t)(h - 1 - y) * row_bytes;
+		int src_y = (int)((int64_t)y * h / s_screenH);
+		const uint8_t* src_row = gl_pixels + (size_t)(h - 1 - src_y) * row_bytes;
 		uint8_t* dst_row = dst_base + (size_t)y * (size_t)dst_pitch;
 
-		for (int x = 0; x < w; x++) {
-			uint8_t r = src_row[x * 4 + 0];
-			uint8_t g = src_row[x * 4 + 1];
-			uint8_t b = src_row[x * 4 + 2];
+		for (int x = 0; x < s_screenW; x++) {
+			int src_x = (int)((int64_t)x * w / s_screenW);
+			uint8_t r = src_row[src_x * 4 + 0];
+			uint8_t g = src_row[src_x * 4 + 1];
+			uint8_t b = src_row[src_x * 4 + 2];
 			// Force alpha to 255 — GL framebuffer alpha is often 0 for opaque
 			// game content, which would make saved screenshots invisible when
 			// loaded and drawn with SDL_BLENDMODE_BLEND
@@ -1094,7 +1153,9 @@ static void ovl_sdl_end_frame(void) {
 	SDL_UnlockSurface(s_renderSurface);
 
 	// Set overlay GL state
-	glViewport(0, 0, s_screenW, s_screenH);
+	glViewport(0, 0,
+			   s_overlayViewportW > 0 ? s_overlayViewportW : s_screenW,
+			   s_overlayViewportH > 0 ? s_overlayViewportH : s_screenH);
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_SCISSOR_TEST);
@@ -1108,34 +1169,8 @@ static void ovl_sdl_end_frame(void) {
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, s_screenW, s_screenH, 0,
 				 GL_RGBA, GL_UNSIGNED_BYTE, s_uploadBuffer);
 
-	// Draw fullscreen quad (surface is top-down, GL is bottom-up => flip V)
-	float verts[] = {
-		// pos.x, pos.y, u, v
-		-1.0f,
-		-1.0f,
-		0.0f,
-		1.0f,
-		1.0f,
-		-1.0f,
-		1.0f,
-		1.0f,
-		-1.0f,
-		1.0f,
-		0.0f,
-		0.0f,
-		1.0f,
-		-1.0f,
-		1.0f,
-		1.0f,
-		1.0f,
-		1.0f,
-		1.0f,
-		0.0f,
-		-1.0f,
-		1.0f,
-		0.0f,
-		0.0f,
-	};
+	float verts[24];
+	overlay_vertices(verts, s_overlayRotation);
 
 	glUseProgram(s_texProgram);
 	glUniform1i(s_texLocTexture, 0);
