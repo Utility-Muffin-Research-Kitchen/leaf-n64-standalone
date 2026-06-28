@@ -362,7 +362,7 @@ index 26e38df..52193d1 100644
      GLfloat vertices[] = {
              -inv + g_texRectTVtx[0].x/ w, inv - g_texRectTVtx[0].y/ h, -g_texRectTVtx[0].z,1,
 diff --git a/src/Video.cpp b/src/Video.cpp
-index c32e1ce..447b690 100644
+index c32e1ce..3d68123 100644
 --- a/src/Video.cpp
 +++ b/src/Video.cpp
 @@ -42,9 +42,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -530,7 +530,7 @@ index c32e1ce..447b690 100644
 +
 +    // emu_frontend: power button, shortcuts, overlay menu (shared with GLideN64)
 +    ensure_frontend_init();
-+    emu_frontend_frame(windowSetting.uDisplayWidth, windowSetting.uDisplayHeight);
++    (void)emu_frontend_frame(windowSetting.uDisplayWidth, windowSetting.uDisplayHeight);
  }
  
  //---------------------------------------------------------------------------------------

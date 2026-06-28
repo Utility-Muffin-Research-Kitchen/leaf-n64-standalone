@@ -58,7 +58,7 @@ All components are built from upstream via Docker cross-compilation toolchains.
 
 Raw ROMs (`.z64`, `.n64`, `.v64`, `.rom`) are passed directly to mupen64plus.
 
-Archived ROMs (`.zip`, `.7z`) are extracted to a tmpfs scratch directory (`/tmp/m64p_extracted.*`) at launch time using a bundled statically-linked [7-Zip](https://www.7-zip.org/) binary (`7zzs`, v26.00). `launch.sh` picks the first `.z64`/`.n64`/`.v64`/`.rom` file in the archive (or the first regular file if none match) and renames it to the archive's basename so that mupen64plus-ui-console's save-name derivation produces the same result as a raw ROM — e.g. `Zelda.zip` and `Zelda.z64` both save to `Zelda.srm`. The scratch directory is cleaned up on exit via an `EXIT/INT/TERM/HUP/QUIT` trap. All overlay metadata (per-game Input Mode file, screenshot previews, game-switcher auto-resume) uses the *original* archive filename so settings persist across runs.
+Archived ROMs (`.zip`, `.7z`) are extracted to a tmpfs scratch directory (`/tmp/m64p_extracted.*`) at launch time using a bundled statically-linked [7-Zip](https://www.7-zip.org/) binary (`7zzs`, v26.00). `launch.sh` picks the first `.z64`/`.n64`/`.v64`/`.rom` file in the archive (or the first regular file if none match) and renames it to the archive's basename so that mupen64plus-ui-console's save-name derivation produces the same result as a raw ROM — e.g. `Zelda.zip` and `Zelda.z64` both save to `Zelda.srm`. The scratch directory is cleaned up on exit via an `EXIT/INT/TERM/HUP/QUIT` trap. Overlay metadata uses the *original* archive filename so settings and preview images persist across runs.
 
 The 7-Zip binary ships alongside the plugins and is downloaded + sha256-verified from `github.com/ip7z/7zip` during `make clone`. Its license (`7zzs.LICENSE`, LGPL / unRAR) sits next to the binary in each platform dir.
 
@@ -68,9 +68,9 @@ All patches live in `patches/shared/`. See [`patches/shared/README.md`](patches/
 
 ## Save states
 
-Save and Load are on the Quick Menu's main screen. When either is highlighted, d-pad left/right cycles through **8 slots** and a preview panel appears on the right half of the screen showing the slot's screenshot (or "Empty Slot" if unused). Pressing A immediately saves or loads the visible slot and closes the menu. This matches NextUI's minarch save-state UX — no separate slot-picker screen.
+Save and Load are on the Quick Menu's main screen. When either is highlighted, d-pad left/right cycles through **8 slots** and a preview panel appears on the right half of the screen showing the slot's screenshot (or "Empty Slot" if unused). Pressing A immediately saves or loads the visible slot and closes the menu.
 
-Slot screenshots are stored as BMP files at `$SHARED_USERDATA_PATH/.minui/N64/<rom>.<slot>.bmp` and are loaded when the menu opens.
+Slot screenshots are stored as BMP files at `$STATES_PATH/Mupen64Plus Standalone/<rom>.<slot>.bmp` on Leaf MLP1 and are loaded when the menu opens. Leaf Save & Quit uses reserved slot `99` plus `$STATES_PATH/Mupen64Plus Standalone/<rom-stem>.state99.png` for recents/switcher resume.
 
 ## Data paths
 
@@ -205,14 +205,16 @@ The overlay menu is defined in `config/shared/overlay_settings.json`. Items tagg
 | Performance | CPU Mode | Powersave / Ondemand / Performance / Auto (applied on-demand) |
 | Performance | Rewind Buffer | Off / Small / Medium / Large |
 | Performance | Frame Skip | Off / 20fps / 25fps / 30fps (applied on-demand) |
-| Shortcuts | *(19 items)* | Toggle/Hold FF, Reset, Quick Save/Load, Screenshot, Game Switcher, 8× Turbo, Cycle Aspect, Toggle/Hold Rewind, Toggle Input Mode |
+| Shortcuts | *(24 configurable items)* | Toggle/Hold FF, Reset, Quick Save/Load, Screenshot, 8× Turbo, Cycle Aspect, Toggle/Hold Rewind, Toggle Input Mode |
 | Cheats | *(dynamic)* | Loaded from `mupencheat.txt` for the current ROM |
+
+`Menu + Select` is fixed to Leaf's standalone game-switcher handoff: save reserved slot `99`, write the resume thumbnail, wait for the state file to settle, and quit back to Leaf. It is not exposed as a configurable shortcut.
 
 #### GLideN64-only settings
 
 | Section | Setting | Notes |
 |---|---|---|
-| Debug | Show FPS, Show VI/s, Show Speed % | Restart required |
+| Debug | Show FPS, Show VI/s, Show Speed % | Drawn by the Leaf HUD overlay |
 | Dithering | Dithering Pattern, Quantization, RDRAM Dithering, Hi-Res Noise Dithering | |
 | Frame Buffer | FB Emulation, Color to RDRAM, Depth to RDRAM, Color from RDRAM, N64 Depth Compare, Disable FB Info | |
 | Gamma | Force Gamma, Gamma Level | |
@@ -225,7 +227,7 @@ The overlay menu is defined in `config/shared/overlay_settings.json`. Items tagg
 
 | Section | Setting | Notes |
 |---|---|---|
-| Debug | Show FPS | Restart required |
+| Debug | Show FPS | Drawn by the Leaf HUD overlay |
 | Frame Buffer | FB Setting, Render To Texture, Screen Update | |
 | Hi-Res Textures | Load Hi-Res Textures, Hi-Res CRC Only | |
 | Performance | Fast Texture Loading, Skip Frame, Accurate Texture Mapping | |
@@ -234,13 +236,13 @@ The overlay menu is defined in `config/shared/overlay_settings.json`. Items tagg
 
 #### Save scope
 
-Settings follow NextUI's minarch save model: changes are applied on-demand in memory where possible but only persisted to disk when the user explicitly picks a target from **Options → Save Changes**:
+Settings follow Leaf's scoped save model: changes are applied on-demand in memory where possible but only persisted to disk when the user explicitly picks a target from **Options → Save Changes**:
 
 - **Save for Console** — writes to `mupen64plus.cfg` (global, all games)
 - **Save for Game** — writes to `per-game/<rom>.cfg` (this ROM only)
 - **Restore Defaults** — deletes the currently-active scope's file and reverts to defaults
 
-The scope indicator at the top of the Save Changes page shows `Using defaults.`, `Using console config.`, or `Using game config.`
+The scope indicator at the top of the Save Changes page shows `Using N64 defaults.`, `Using N64 settings.`, or `Using this game's settings.`
 
 ### CPU mode
 

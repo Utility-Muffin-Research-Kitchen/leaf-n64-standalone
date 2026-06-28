@@ -483,7 +483,7 @@ index 701d27d2..e6ad4c80 100644
  
  #endif // DISPLAYLOADPROGRESS_H
 diff --git a/src/DisplayWindow.cpp b/src/DisplayWindow.cpp
-index 59725f62..d4029d14 100644
+index 59725f62..8559deb6 100644
 --- a/src/DisplayWindow.cpp
 +++ b/src/DisplayWindow.cpp
 @@ -1,5 +1,6 @@
@@ -614,7 +614,7 @@ index 59725f62..d4029d14 100644
  bool DisplayWindow::start()
  {
  	if (!_start())
-@@ -48,6 +163,17 @@ void DisplayWindow::swapBuffers()
+@@ -48,6 +163,20 @@ void DisplayWindow::swapBuffers()
  {
  	m_drawer.drawOSD();
  	m_drawer.clearStatistics();
@@ -624,9 +624,12 @@ index 59725f62..d4029d14 100644
 +	// GL state corruption while hi-res textures are being indexed.
 +	ensure_frontend_init();
 +	if (!isLoadProgressActive()) {
-+		emu_frontend_frame(getScreenWidth(), getScreenHeight());
++		bool frontendPresented = emu_frontend_frame(getScreenWidth(), getScreenHeight());
 +		Gliden64HudCtx hud = {(int)getScreenWidth(), (int)getScreenHeight()};
-+		gliden64_exec_on_video_thread(gliden64_render_hud_on_video_thread, &hud);
++		if (!frontendPresented)
++			gliden64_exec_on_video_thread(gliden64_render_hud_on_video_thread, &hud);
++		if (frontendPresented)
++			return;
 +	}
 +
  	_swapBuffers();

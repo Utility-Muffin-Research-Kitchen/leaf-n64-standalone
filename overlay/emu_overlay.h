@@ -57,6 +57,7 @@ typedef struct {
 	uint32_t background;
 	uint32_t panel;
 	uint32_t panel_strong;
+	uint32_t accent;
 	uint32_t text;
 	uint32_t hint;
 	uint32_t highlight;
@@ -107,11 +108,6 @@ typedef struct {
 	int screen_w;
 	int screen_h;
 	EmuOvlTheme theme;
-
-	// Button hint icons (icon_id from render->load_icon, -1 = not loaded)
-	int icon_a;
-	int icon_b;
-	int icon_dpad_h;
 
 	// Save state screenshots (matches minarch's .minui path for game switcher)
 	char screenshot_dir[512];		   // e.g. /mnt/SDCARD/.userdata/shared/.minui/N64

@@ -1004,22 +1004,17 @@ static void ovl_sdl_draw_rounded_rect(int x, int y, int w, int h, int radius,
 	uint8_t cg = (uint8_t)((color >> 8) & 0xFF);
 	uint8_t cb = (uint8_t)((color) & 0xFF);
 
-	Uint32 packed = SDL_MapRGBA(s_renderSurface->format, cr, cg, cb, ca);
-
 	// Interior bands (no rounding in these regions):
 	//   middle strip: full-width, y+radius .. y+h-radius
 	//   top strip:    x+radius .. x+w-radius, y .. y+radius
 	//   bottom strip: x+radius .. x+w-radius, y+h-radius .. y+h
 	if (h - 2 * radius > 0) {
-		SDL_Rect mid = {x, y + radius, w, h - 2 * radius};
-		SDL_FillRect(s_renderSurface, &mid, packed);
+		ovl_sdl_draw_rect(x, y + radius, w, h - 2 * radius, color);
 	}
 	int mid_w = w - 2 * radius;
 	if (radius > 0 && mid_w > 0) {
-		SDL_Rect top_mid = {x + radius, y, mid_w, radius};
-		SDL_Rect bot_mid = {x + radius, y + h - radius, mid_w, radius};
-		SDL_FillRect(s_renderSurface, &top_mid, packed);
-		SDL_FillRect(s_renderSurface, &bot_mid, packed);
+		ovl_sdl_draw_rect(x + radius, y, mid_w, radius, color);
+		ovl_sdl_draw_rect(x + radius, y + h - radius, mid_w, radius, color);
 	}
 
 	if (radius == 0)

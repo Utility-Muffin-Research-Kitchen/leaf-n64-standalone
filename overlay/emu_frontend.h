@@ -42,8 +42,10 @@ typedef struct {
 void emu_frontend_init(EmuFrontendCoreAPI* api, EmuFrontendPluginOps* ops);
 
 // Called every frame from the video plugin's render loop. w/h are current
-// screen dimensions (used for overlay GL init on first open).
-void emu_frontend_frame(int w, int h);
+// screen dimensions (used for overlay GL init on first open). Returns true when
+// the frontend already presented or intentionally held the frame, so the caller
+// should skip its normal buffer swap for this frame.
+bool emu_frontend_frame(int w, int h);
 
 // Draw lightweight always-on HUD elements before the video plugin swaps.
 // Returns true when GL state was touched.
@@ -62,7 +64,7 @@ EmuOvlConfig* emu_frontend_get_overlay_config(void);
 // Button state tracking (called every frame)
 void emu_frontend_update_buttons(void);
 
-// Shortcut binding (25 remappable shortcuts — same capture/modifier model as controls)
+// Shortcut binding (25 stored shortcuts; only configurable shortcuts are shown)
 #define SHORTCUT_COUNT 25
 typedef struct {
 	const char* key;       // config key: "shortcut_toggle_ff", etc.
@@ -70,11 +72,16 @@ typedef struct {
 	int physical;          // SDL button index (-1 = unbound)
 	int is_axis;           // 0 = button, 1 = axis
 	int axis_dir;          // +1 or -1 for axes
-	int mod;               // modifier: 0=none, 8=MENU, 6=SELECT, -3=L2, -6=R2
+	int mod;               // modifier: 0=none, button index, or -(axis_id + 1)
 } ShortcutBinding;
 
 // Get the shortcuts array (owned by emu_frontend)
 ShortcutBinding* emu_frontend_get_shortcuts(void);
+
+// Get the visible/configurable shortcut rows shown by the overlay.
+int emu_frontend_visible_shortcut_count(void);
+ShortcutBinding* emu_frontend_get_visible_shortcut(int visible_index);
+int emu_frontend_visible_shortcut_storage_index(int visible_index);
 
 // Get human-readable label for a shortcut (e.g., "R1", "MENU+A")
 const char* emu_frontend_shortcut_label(const ShortcutBinding* s);

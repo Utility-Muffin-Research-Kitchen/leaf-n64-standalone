@@ -8,7 +8,7 @@
 #define EMU_OVL_MAX_VALUES 16
 #define EMU_OVL_MAX_STR 128
 
-// Settings save scope — mirrors NextUI minarch's CONFIG_NONE/CONSOLE/GAME enum.
+// Settings save scope for Leaf-style console/per-game persistence.
 // Determines where the overlay writes on "Save" and what "Restore Defaults" deletes.
 typedef enum {
 	EMU_SCOPE_NONE = 0,   // no user config — pure JSON defaults

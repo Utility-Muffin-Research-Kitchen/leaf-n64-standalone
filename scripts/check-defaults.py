@@ -7,14 +7,14 @@ Shows three categories:
          overlay items like shortcuts, cpu_mode, and Rice-specific keys)
   OK   — values match (hidden by default; pass --all to show)
 
-Items targeting [Video-Rice] or [NextUI] INI sections are hidden by default
+Items targeting [Video-Rice] or Leaf-owned overlay INI sections are hidden by default
 since default.cfg only contains [Video-GLideN64] and core sections. Pass
 --include-all-sections to show them.
 
 Usage:
   python3 scripts/check-defaults.py
   python3 scripts/check-defaults.py --all                  # include OK items
-  python3 scripts/check-defaults.py --include-all-sections  # include Rice/NextUI
+  python3 scripts/check-defaults.py --include-all-sections  # include Rice/Leaf
   python3 scripts/check-defaults.py --cfg path/to/default.cfg --json path/to/overlay_settings.json
 """
 
@@ -45,6 +45,17 @@ def normalize(item: dict, ini_val: Optional[str]) -> Tuple[str, Optional[str]]:
     json_default = item.get("default", "N/A")
     item_type = item.get("type", "")
     float_scale = item.get("float_scale", 0)
+    values = item.get("values", [])
+
+    if (
+        item_type == "cycle"
+        and isinstance(values, list)
+        and values
+        and isinstance(values[0], str)
+        and isinstance(json_default, int)
+        and 0 <= json_default < len(values)
+    ):
+        json_default = values[json_default]
 
     # JSON side
     if item_type == "bool":
@@ -94,11 +105,17 @@ def main() -> None:
     parser.add_argument(
         "--include-all-sections",
         action="store_true",
-        help="Include items targeting [Video-Rice] and [NextUI] (hidden by default)",
+        help="Include items targeting [Video-Rice] and Leaf-owned sections (hidden by default)",
     )
     args = parser.parse_args()
 
-    IGNORED_SECTIONS = {"Video-Rice", "NextUI", "NextUI-Input"}
+    IGNORED_SECTIONS = {
+        "Video-Rice",
+        "Leaf",
+        "Leaf-Input",
+        "NextUI",
+        "NextUI-Input",
+    }
 
 
     ini = parse_ini(args.cfg)

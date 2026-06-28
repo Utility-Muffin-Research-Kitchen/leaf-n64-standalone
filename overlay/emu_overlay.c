@@ -1,5 +1,4 @@
 #include "emu_overlay.h"
-#include "emu_overlay_icons.h"
 #include "emu_frontend.h"
 #include "cjson/cJSON.h"
 #include <dirent.h>
@@ -15,6 +14,11 @@
 #define BUTTON_MARGIN 5
 #define BUTTON_PADDING 12
 #define PANEL_RADIUS 14
+#define FOOTER_UNDERLAY_ALPHA 200
+#define HEADER_CONTENT_GAP 8
+#define CONTENT_PANEL_TOP_TRIM 12
+#define HINT_UP_DOWN "__nav_up_down__"
+#define HINT_LEFT_RIGHT "__nav_left_right__"
 
 static int ovl_scale = 2;
 static int ovl_padding = 10;
@@ -29,6 +33,14 @@ static uint32_t color_with_alpha(uint32_t color, unsigned int alpha) {
 	if (alpha > 255)
 		alpha = 255;
 	return (color & 0x00FFFFFFu) | ((uint32_t)alpha << 24);
+}
+
+static uint32_t color_scale_alpha(uint32_t color, unsigned int alpha) {
+	if (alpha > 255)
+		alpha = 255;
+	unsigned int current = (unsigned int)((color >> 24) & 0xFFu);
+	unsigned int scaled = current * alpha / 255;
+	return (color & 0x00FFFFFFu) | ((uint32_t)scaled << 24);
 }
 
 static int hex_nibble(char c) {
@@ -178,6 +190,7 @@ static void load_theme(EmuOvl* ovl) {
 	theme.hint = EMU_OVL_COLOR_HINT;
 	theme.highlight = EMU_OVL_COLOR_HIGHLIGHT;
 	theme.highlighted_text = EMU_OVL_COLOR_HIGHLIGHT_TEXT;
+	theme.accent = EMU_OVL_COLOR_HIGHLIGHT;
 	theme.button_glyph_bg = EMU_OVL_COLOR_HIGHLIGHT;
 	theme.button_label = EMU_OVL_COLOR_HIGHLIGHT_TEXT;
 	theme.preview_bg = EMU_OVL_COLOR_PREVIEW_BG;
@@ -188,6 +201,7 @@ static void load_theme(EmuOvl* ovl) {
 
 	// 1) Active Jawaka/Catastrophe stylesheet — primary source of truth.
 	bool have_highlighted_text = false;
+	bool have_accent = false;
 	bool have_button_glyph_bg = false;
 	bool have_button_label = false;
 	cJSON* ss = stylesheet_load();
@@ -206,6 +220,7 @@ static void load_theme(EmuOvl* ovl) {
 			theme.pill_radius_ratio = (float)radius->valuedouble;
 
 		const cJSON* bh = cJSON_GetObjectItemCaseSensitive(ss, "button_hints");
+		have_accent = json_color(bh, "button_a_color", &theme.accent);
 		have_button_glyph_bg = json_color(bh, "glyph_bg_color", &theme.button_glyph_bg);
 		have_button_label = json_color(bh, "button_text_color", &theme.button_label);
 		cJSON_Delete(ss);
@@ -219,10 +234,15 @@ static void load_theme(EmuOvl* ovl) {
 		theme.text = parsed;
 	if (parse_theme_color(getenv("CAT_COLOR_HINT"), &parsed))
 		theme.hint = parsed;
-	if (parse_theme_color(getenv("CAT_COLOR_HIGHLIGHT"), &parsed))
+	bool have_highlight_override = parse_theme_color(getenv("CAT_COLOR_HIGHLIGHT"), &parsed);
+	if (have_highlight_override)
 		theme.highlight = parsed;
 	else if (parse_theme_color(getenv("CAT_COLOR_ACCENT"), &parsed))
 		theme.highlight = parsed;
+	if (parse_theme_color(getenv("CAT_COLOR_ACCENT"), &parsed)) {
+		theme.accent = parsed;
+		have_accent = true;
+	}
 
 	// 3) Derive panel + dependent colors from the resolved base colors. Only
 	//    derive a dependent color when neither the stylesheet nor an explicit
@@ -230,6 +250,8 @@ static void load_theme(EmuOvl* ovl) {
 	theme.background = background;
 	theme.panel = color_with_alpha(background, 200);
 	theme.panel_strong = color_with_alpha(background, 230);
+	if (!have_accent)
+		theme.accent = color_with_alpha(background, 255);
 	if (!have_highlighted_text)
 		theme.highlighted_text =
 			derive_highlighted_text(background, theme.text, theme.highlight);
@@ -434,7 +456,7 @@ static int find_cheats_section_index(EmuOvl* ovl) {
 // ---------------------------------------------------------------------------
 
 static void get_slot_screenshot_path(EmuOvl* ovl, int slot, char* buf, int buf_size) {
-	// Match minarch format: <screenshot_dir>/<rom_file>.<slot>.bmp
+	// Slot preview format: <screenshot_dir>/<rom_file>.<slot>.bmp
 	snprintf(buf, buf_size, "%s/%s.%d.bmp", ovl->screenshot_dir, ovl->rom_file, slot);
 }
 
@@ -532,7 +554,7 @@ int emu_ovl_init(EmuOvl* ovl, EmuOvlConfig* cfg, EmuOvlRenderBackend* render,
 
 	build_main_menu(ovl);
 
-	// Screenshot directory (matches minarch's .minui path for game switcher)
+	// Screenshot directory for save/load slot previews.
 	ovl->screenshot_dir[0] = '\0';
 	ovl->rom_file[0] = '\0';
 	const char* ss_dir = getenv("EMU_OVERLAY_SCREENSHOT_DIR");
@@ -545,17 +567,6 @@ int emu_ovl_init(EmuOvl* ovl, EmuOvlConfig* cfg, EmuOvlRenderBackend* render,
 	// Init slot screenshot icons
 	for (int i = 0; i < EMU_OVL_MAX_SLOTS; i++)
 		ovl->slot_icons[i] = -1;
-
-	// Load button hint icons from embedded ARGB data
-	ovl->icon_a = -1;
-	ovl->icon_b = -1;
-	ovl->icon_dpad_h = -1;
-	if (render->load_icon_rgba) {
-		int icon_h = S(BUTTON_SIZE);
-		ovl->icon_a = render->load_icon_rgba(icon_a_data, ICON_A_W, ICON_A_H, icon_h);
-		ovl->icon_b = render->load_icon_rgba(icon_b_data, ICON_B_W, ICON_B_H, icon_h);
-		ovl->icon_dpad_h = render->load_icon_rgba(icon_dpad_h_data, ICON_DPAD_H_W, ICON_DPAD_H_H, icon_h);
-	}
 
 	// Note: caller is responsible for calling render->init() before emu_ovl_init
 	return 0;
@@ -696,7 +707,7 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 		bool is_input = (strcmp(sec->name, "Controls") == 0);
 		bool is_shortcuts = (strcmp(sec->name, "Shortcuts") == 0);
 		int remap_rows = is_input ? N64_REMAP_COUNT : 0;
-		int shortcut_rows = is_shortcuts ? SHORTCUT_COUNT : 0;
+		int shortcut_rows = is_shortcuts ? emu_frontend_visible_shortcut_count() : 0;
 		int total_rows = sec->item_count + remap_rows + shortcut_rows + 1; // items + [remaps|shortcuts] + reset
 		if (input->up) {
 			ovl->selected = (ovl->selected - 1 + total_rows) % total_rows;
@@ -725,12 +736,14 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 					emu_frontend_write_button_map_file();
 				}
 				if (is_shortcuts) {
-					ShortcutBinding* sc = emu_frontend_get_shortcuts();
-					for (int i = 0; i < SHORTCUT_COUNT; i++) {
-						sc[i].physical = -1;
-						sc[i].is_axis = 0;
-						sc[i].axis_dir = 0;
-						sc[i].mod = 0;
+					for (int i = 0; i < shortcut_rows; i++) {
+						ShortcutBinding* sc = emu_frontend_get_visible_shortcut(i);
+						if (!sc)
+							continue;
+						sc->physical = -1;
+						sc->is_axis = 0;
+						sc->axis_dir = 0;
+						sc->mod = 0;
 					}
 				}
 			} else if (is_input && ovl->selected >= sec->item_count &&
@@ -741,8 +754,12 @@ bool emu_ovl_update(EmuOvl* ovl, EmuOvlInput* input) {
 			} else if (is_shortcuts && ovl->selected >= sec->item_count &&
 					   ovl->selected < sec->item_count + shortcut_rows) {
 				// Start bind capture for shortcuts (1000 + index)
-				ovl->bind_capture = 1000 + (ovl->selected - sec->item_count);
-				ovl->bind_capture_start = SDL_GetTicks();
+				int storage_index = emu_frontend_visible_shortcut_storage_index(
+					ovl->selected - sec->item_count);
+				if (storage_index >= 0) {
+					ovl->bind_capture = 1000 + storage_index;
+					ovl->bind_capture_start = SDL_GetTicks();
+				}
 			} else if (ovl->selected < sec->item_count && sec->item_count > 0) {
 				cycle_item_next(&sec->items[ovl->selected]);
 			}
@@ -849,6 +866,10 @@ static void draw_pill(EmuOvl* ovl, int x, int y, int w, int h, uint32_t color) {
 		r->draw_rect(x, y, w, h, color);
 }
 
+static uint32_t footer_bg_color(uint32_t color) {
+	return color_scale_alpha(color, FOOTER_UNDERLAY_ALPHA);
+}
+
 static int content_margin(void) {
 	return S(24);
 }
@@ -862,7 +883,11 @@ static int content_w(const EmuOvl* ovl) {
 }
 
 static int content_top(void) {
-	return PADDING_PX + S(58);
+	return PADDING_PX + S(58 + HEADER_CONTENT_GAP);
+}
+
+static int content_panel_top(void) {
+	return content_top() + S(CONTENT_PANEL_TOP_TRIM);
 }
 
 static int content_bottom(const EmuOvl* ovl) {
@@ -1105,58 +1130,159 @@ static void draw_menu_bar(EmuOvl* ovl, const char* title, const char* subtitle) 
 	draw_status_bar(ovl, title_y + title_h / 2);
 }
 
-// Map a button name to its icon handle, or -1 if no icon loaded
-static int get_hint_icon(EmuOvl* ovl, const char* btn_name) {
-	if (strcmp(btn_name, "A") == 0)
-		return ovl->icon_a;
-	if (strcmp(btn_name, "B") == 0)
-		return ovl->icon_b;
-	return -1;
+static size_t utf8_codepoint_count(const char* text) {
+	size_t count = 0;
+	if (!text)
+		return 0;
+	while (*text) {
+		if ((((unsigned char)*text) & 0xC0u) != 0x80u)
+			count++;
+		text++;
+	}
+	return count;
+}
+
+static bool footer_button_text_is_single_codepoint(const char* text) {
+	return utf8_codepoint_count(text) == 1;
+}
+
+static int footer_button_font_id(const char* btn) {
+	return footer_button_text_is_single_codepoint(btn) ?
+		EMU_OVL_FONT_MEDIUM : EMU_OVL_FONT_TINY;
+}
+
+static bool is_nav_button_glyph(const char* btn) {
+	return strcmp(btn, HINT_LEFT_RIGHT) == 0 ||
+		   strcmp(btn, HINT_UP_DOWN) == 0;
+}
+
+static int nav_button_glyph_width(int btn_inner_h) {
+	return btn_inner_h + (btn_inner_h * 2) / 3;
 }
 
 // Measure a button glyph's width.
 static int measure_button_glyph(EmuOvl* ovl, const char* btn, int btn_inner_h) {
 	EmuOvlRenderBackend* r = ovl->render;
-	if (strlen(btn) == 1) {
-		// Single-char button is always a filled BUTTON_SIZE circle (programmatic)
+	if (is_nav_button_glyph(btn))
+		return nav_button_glyph_width(btn_inner_h);
+	if (footer_button_text_is_single_codepoint(btn))
 		return btn_inner_h;
-	}
-	// Special multi-char hints with PNG icons (d-pad etc.)
-	int icon_id = get_hint_icon(ovl, btn);
-	if (icon_id >= 0 && r->icon_width)
-		return r->icon_width(icon_id);
-	// Plain multi-char button.
-	int tw = r->text_width(btn, EMU_OVL_FONT_TINY);
+	int tw = r->text_width(btn, footer_button_font_id(btn));
 	return btn_inner_h / 2 + tw;
+}
+
+static void draw_thick_line(EmuOvl* ovl, int x0, int y0, int x1, int y1,
+							int thickness, uint32_t color) {
+	EmuOvlRenderBackend* r = ovl->render;
+	if (thickness < 1)
+		thickness = 1;
+	int half = thickness / 2;
+	int dx = abs(x1 - x0);
+	int sx = x0 < x1 ? 1 : -1;
+	int dy = -abs(y1 - y0);
+	int sy = y0 < y1 ? 1 : -1;
+	int err = dx + dy;
+
+	for (;;) {
+		r->draw_rect(x0 - half, y0 - half, thickness, thickness, color);
+		if (x0 == x1 && y0 == y1)
+			break;
+		int e2 = 2 * err;
+		if (e2 >= dy) {
+			err += dy;
+			x0 += sx;
+		}
+		if (e2 <= dx) {
+			err += dx;
+			y0 += sy;
+		}
+	}
+}
+
+typedef enum {
+	NAV_CHEVRON_LEFT,
+	NAV_CHEVRON_RIGHT,
+	NAV_CHEVRON_UP,
+	NAV_CHEVRON_DOWN
+} NavChevronDir;
+
+static void draw_nav_chevron(EmuOvl* ovl, int cx, int cy, int half,
+							 int thickness, NavChevronDir dir, uint32_t color) {
+	switch (dir) {
+	case NAV_CHEVRON_LEFT:
+		draw_thick_line(ovl, cx + half, cy - half, cx - half, cy, thickness, color);
+		draw_thick_line(ovl, cx - half, cy, cx + half, cy + half, thickness, color);
+		break;
+	case NAV_CHEVRON_RIGHT:
+		draw_thick_line(ovl, cx - half, cy - half, cx + half, cy, thickness, color);
+		draw_thick_line(ovl, cx + half, cy, cx - half, cy + half, thickness, color);
+		break;
+	case NAV_CHEVRON_UP:
+		draw_thick_line(ovl, cx - half, cy + half, cx, cy - half, thickness, color);
+		draw_thick_line(ovl, cx, cy - half, cx + half, cy + half, thickness, color);
+		break;
+	case NAV_CHEVRON_DOWN:
+		draw_thick_line(ovl, cx - half, cy - half, cx, cy + half, thickness, color);
+		draw_thick_line(ovl, cx, cy + half, cx + half, cy - half, thickness, color);
+		break;
+	}
+}
+
+static void draw_nav_button_glyph(EmuOvl* ovl, const char* btn, int gx, int gy,
+								  int w, int btn_inner_h) {
+	int cy = gy + btn_inner_h / 2;
+	int gap = btn_inner_h / 4 + S(1);
+	int half = btn_inner_h / 5;
+	int thickness = btn_inner_h / 10;
+	if (thickness < S(1))
+		thickness = S(1);
+	int left_cx = gx + w / 2 - gap;
+	int right_cx = gx + w / 2 + gap;
+
+	if (strcmp(btn, HINT_LEFT_RIGHT) == 0) {
+		draw_nav_chevron(ovl, left_cx, cy, half, thickness,
+						 NAV_CHEVRON_LEFT, ovl->theme.button_label);
+		draw_nav_chevron(ovl, right_cx, cy, half, thickness,
+						 NAV_CHEVRON_RIGHT, ovl->theme.button_label);
+	} else {
+		draw_nav_chevron(ovl, left_cx, cy, half, thickness,
+						 NAV_CHEVRON_UP, ovl->theme.button_label);
+		draw_nav_chevron(ovl, right_cx, cy, half, thickness,
+						 NAV_CHEVRON_DOWN, ovl->theme.button_label);
+	}
 }
 
 // Draw a single button glyph at (gx, gy). btn_inner_h is the inner pill height.
 static int draw_button_glyph(EmuOvl* ovl, const char* btn, int gx, int gy,
 							 int btn_inner_h) {
 	EmuOvlRenderBackend* r = ovl->render;
-	if (strlen(btn) == 1) {
+	if (is_nav_button_glyph(btn)) {
+		int w = nav_button_glyph_width(btn_inner_h);
+		draw_pill(ovl, gx, gy, w, btn_inner_h,
+				  footer_bg_color(ovl->theme.button_glyph_bg));
+		draw_nav_button_glyph(ovl, btn, gx, gy, w, btn_inner_h);
+		return w;
+	}
+
+	int font_id = footer_button_font_id(btn);
+	if (footer_button_text_is_single_codepoint(btn)) {
 		// Jawaka footer glyph: accent circle with light text.
-		draw_pill(ovl, gx, gy, btn_inner_h, btn_inner_h, ovl->theme.button_glyph_bg);
-		int tw = r->text_width(btn, EMU_OVL_FONT_MEDIUM);
-		int th = r->text_height(EMU_OVL_FONT_MEDIUM);
+		draw_pill(ovl, gx, gy, btn_inner_h, btn_inner_h,
+				  footer_bg_color(ovl->theme.button_glyph_bg));
+		int tw = r->text_width(btn, font_id);
+		int th = r->text_height(font_id);
 		r->draw_text(btn, gx + (btn_inner_h - tw) / 2,
 					 gy + (btn_inner_h - th) / 2,
-					 ovl->theme.button_label, EMU_OVL_FONT_MEDIUM);
+					 ovl->theme.button_label, font_id);
 		return btn_inner_h;
 	}
-	// PNG icon path for special hints (d-pad)
-	int icon_id = get_hint_icon(ovl, btn);
-	if (icon_id >= 0 && r->draw_icon) {
-		r->draw_icon(icon_id, gx, gy);
-		return r->icon_width(icon_id);
-	}
-	// Multi-char inner pill.
-	int tw = r->text_width(btn, EMU_OVL_FONT_TINY);
+	int tw = r->text_width(btn, font_id);
 	int w = btn_inner_h / 2 + tw;
-	draw_pill(ovl, gx, gy, w, btn_inner_h, ovl->theme.button_glyph_bg);
-	int th = r->text_height(EMU_OVL_FONT_TINY);
+	draw_pill(ovl, gx, gy, w, btn_inner_h,
+			  footer_bg_color(ovl->theme.button_glyph_bg));
+	int th = r->text_height(font_id);
 	r->draw_text(btn, gx + btn_inner_h / 4, gy + (btn_inner_h - th) / 2,
-				 ovl->theme.button_label, EMU_OVL_FONT_TINY);
+				 ovl->theme.button_label, font_id);
 	return w;
 }
 
@@ -1186,7 +1312,7 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 	int y = ovl->screen_h - PADDING_PX - pill_h;
 
 	// Outer theme-coloured pill, matching Jawaka's footer underlay.
-	draw_pill(ovl, x, y, group_w, pill_h, ovl->theme.panel);
+	draw_pill(ovl, x, y, group_w, pill_h, footer_bg_color(ovl->theme.accent));
 
 	// Pass 2: draw contents. Start at x + BM, advance by (pair_w + BM) per pair.
 	int cx = x + bm;
@@ -1211,6 +1337,8 @@ static void draw_button_group(EmuOvl* ovl, const char* hints[], int hint_count,
 static bool is_nav_hint(const char* btn) {
 	return strcmp(btn, "LEFT/RIGHT") == 0 ||
 		   strcmp(btn, "UP/DOWN") == 0 ||
+		   strcmp(btn, HINT_LEFT_RIGHT) == 0 ||
+		   strcmp(btn, HINT_UP_DOWN) == 0 ||
 		   strcmp(btn, "L/R") == 0 ||
 		   strcmp(btn, "L1/R1") == 0;
 }
@@ -1300,7 +1428,7 @@ static void render_main_menu(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
 	draw_menu_bar(ovl, ovl->game_name, ovl->console_name);
-	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_content_panel(ovl, content_panel_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
 	int x = content_x();
@@ -1357,10 +1485,11 @@ static void render_main_menu(EmuOvl* ovl) {
 	}
 
 	if (sel_type == EMU_OVL_MAIN_CONTINUE) {
-		const char* hints[] = {"UP/DOWN", "Move", "A", "Resume", "B", "Resume"};
+		const char* hints[] = {HINT_UP_DOWN, "Move", "A", "Resume", "B", "Resume"};
 		draw_footer_hints(ovl, hints, 6);
 	} else {
-		const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Resume", "A", "OK"};
+		const char* hints[] = {
+			HINT_UP_DOWN, "Move", HINT_LEFT_RIGHT, "Adjust", "B", "Resume", "A", "OK"};
 		draw_footer_hints(ovl, hints, 8);
 	}
 }
@@ -1369,7 +1498,7 @@ static void render_section_list(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
 	draw_menu_bar(ovl, "Options", NULL);
-	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_content_panel(ovl, content_panel_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
 	int x = content_x();
@@ -1411,7 +1540,7 @@ static void render_section_list(EmuOvl* ovl) {
 					 ovl->theme.hint, EMU_OVL_FONT_TINY);
 	}
 
-	const char* hints[] = {"UP/DOWN", "Move", "B", "Back", "A", "Open"};
+	const char* hints[] = {HINT_UP_DOWN, "Move", "B", "Back", "A", "Open"};
 	draw_footer_hints(ovl, hints, 6);
 }
 
@@ -1420,7 +1549,7 @@ static void render_section_items(EmuOvl* ovl) {
 	EmuOvlSection* sec = &ovl->config->sections[ovl->current_section];
 
 	draw_menu_bar(ovl, sec->name, NULL);
-	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_content_panel(ovl, content_panel_top(), content_bottom(ovl));
 
 	int row_h = S(PILL_SIZE);
 	int items_per_page = ovl->items_per_page;
@@ -1431,7 +1560,7 @@ static void render_section_items(EmuOvl* ovl) {
 	bool is_input = (strcmp(sec->name, "Controls") == 0);
 	bool is_shortcuts = (strcmp(sec->name, "Shortcuts") == 0);
 	int remap_rows = is_input ? N64_REMAP_COUNT : 0;
-	int shortcut_rows = is_shortcuts ? SHORTCUT_COUNT : 0;
+	int shortcut_rows = is_shortcuts ? emu_frontend_visible_shortcut_count() : 0;
 	int total_rows = sec->item_count + remap_rows + shortcut_rows + 1;
 
 	// Scroll
@@ -1442,8 +1571,6 @@ static void render_section_items(EmuOvl* ovl) {
 		vis_count = total_rows;
 
 	N64ButtonMapping* mappings = is_input ? emu_frontend_get_button_mappings() : NULL;
-	ShortcutBinding* shortcuts = is_shortcuts ? emu_frontend_get_shortcuts() : NULL;
-
 	for (int vi = 0; vi < vis_count; vi++) {
 		int idx = ovl->scroll_offset + vi;
 		if (idx >= total_rows)
@@ -1486,10 +1613,14 @@ static void render_section_items(EmuOvl* ovl) {
 				   idx < sec->item_count + shortcut_rows) {
 			// Shortcut binding row
 			int si = idx - sec->item_count;
+			int storage_index = emu_frontend_visible_shortcut_storage_index(si);
+			ShortcutBinding* shortcut = emu_frontend_get_visible_shortcut(si);
+			if (!shortcut)
+				continue;
 			const char* val;
 			char countdown_buf[16];
 			int bc_idx = ovl->bind_capture - 1000;
-			if (ovl->bind_capture >= 1000 && bc_idx == si) {
+			if (ovl->bind_capture >= 1000 && bc_idx == storage_index) {
 				unsigned int elapsed = SDL_GetTicks() - ovl->bind_capture_start;
 				if (elapsed < 500) {
 					val = "...";
@@ -1501,10 +1632,10 @@ static void render_section_items(EmuOvl* ovl) {
 					val = countdown_buf;
 				}
 			} else {
-				val = emu_frontend_shortcut_label(&shortcuts[si]);
+				val = emu_frontend_shortcut_label(shortcut);
 			}
 			draw_settings_row(ovl, x, iy, w, row_h,
-							  shortcuts[si].label, val, sel, false,
+							  shortcut->label, val, sel, false,
 							  EMU_OVL_FONT_SMALL);
 		} else {
 			// "Reset to Default" row (last)
@@ -1528,14 +1659,14 @@ static void render_section_items(EmuOvl* ovl) {
 		}
 	}
 
-	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Back"};
+	const char* hints[] = {HINT_UP_DOWN, "Move", HINT_LEFT_RIGHT, "Adjust", "B", "Back"};
 	draw_footer_hints(ovl, hints, 6);
 }
 
 static void render_cheats(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 	draw_menu_bar(ovl, "Cheats", NULL);
-	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_content_panel(ovl, content_panel_top(), content_bottom(ovl));
 
 	int count = ovl->cheat_cb.get_count ? ovl->cheat_cb.get_count() : 0;
 
@@ -1584,7 +1715,7 @@ static void render_cheats(EmuOvl* ovl) {
 					 ovl->theme.hint, EMU_OVL_FONT_TINY);
 	}
 
-	const char* hints[] = {"UP/DOWN", "Move", "LEFT/RIGHT", "Adjust", "B", "Back"};
+	const char* hints[] = {HINT_UP_DOWN, "Move", HINT_LEFT_RIGHT, "Adjust", "B", "Back"};
 	draw_footer_hints(ovl, hints, 6);
 }
 
@@ -1601,7 +1732,7 @@ static void render_save_changes(EmuOvl* ovl) {
 	EmuOvlRenderBackend* r = ovl->render;
 
 	draw_menu_bar(ovl, "Save Changes", NULL);
-	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_content_panel(ovl, content_panel_top(), content_bottom(ovl));
 
 	// Scope indicator below the title
 	const char* desc = scope_label(ovl->scope);
@@ -1702,7 +1833,7 @@ void emu_ovl_render_status(EmuOvl* ovl, const char* message) {
 	r->begin_frame();
 	r->draw_captured_frame(0.42f);
 	draw_menu_bar(ovl, ovl->game_name, ovl->console_name);
-	draw_content_panel(ovl, content_top(), content_bottom(ovl));
+	draw_content_panel(ovl, content_panel_top(), content_bottom(ovl));
 	draw_centered_text(r, message && message[0] ? message : "Working...",
 					   ovl->screen_w / 2, (content_top() + content_bottom(ovl)) / 2,
 					   ovl->theme.text, EMU_OVL_FONT_LARGE);

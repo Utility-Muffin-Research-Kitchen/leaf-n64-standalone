@@ -187,7 +187,10 @@ case "$ROM" in
         ;;
 esac
 
-VIDEO_PLUGIN_VALUE="$("$INI" get "$DEVICE_CFG" "NextUI" "VideoPlugin" 2>/dev/null || true)"
+VIDEO_PLUGIN_VALUE="$("$INI" get "$DEVICE_CFG" "Leaf" "VideoPlugin" 2>/dev/null || true)"
+if [ -z "$VIDEO_PLUGIN_VALUE" ]; then
+    VIDEO_PLUGIN_VALUE="$("$INI" get "$DEVICE_CFG" "NextUI" "VideoPlugin" 2>/dev/null || true)"
+fi
 case "$VIDEO_PLUGIN_VALUE" in
     0|gliden64|GLideN64)
         if [ -f "$LIB_DIR/mupen64plus-video-GLideN64.so" ]; then

@@ -387,13 +387,36 @@ static const char* get_ini_section_for_item(const EmuOvlConfig* cfg,
 	return cfg->config_section;
 }
 
-int emu_ovl_cfg_read_ini(EmuOvlConfig* cfg, const char* ini_path) {
+static const char* legacy_ini_section_for(const char* section) {
+	if (!section)
+		return NULL;
+	if (strcmp(section, "Leaf") == 0)
+		return "NextUI";
+	if (strcmp(section, "Leaf-Input") == 0)
+		return "NextUI-Input";
+	return NULL;
+}
+
+static bool ini_section_matches_read_mode(const char* current_section,
+                                          const char* target_section,
+                                          bool legacy_only) {
+	if (!current_section || !target_section)
+		return false;
+	if (!legacy_only)
+		return strcmp(target_section, current_section) == 0;
+	const char* legacy = legacy_ini_section_for(target_section);
+	return legacy && strcmp(legacy, current_section) == 0;
+}
+
+static int emu_ovl_cfg_read_ini_mode(EmuOvlConfig* cfg, const char* ini_path,
+                                     bool legacy_only, bool report_open_error) {
 	if (!cfg || !ini_path)
 		return -1;
 
 	FILE* f = fopen(ini_path, "r");
 	if (!f) {
-		printf("[emu_ovl_cfg] failed to open INI %s for reading\n", ini_path);
+		if (report_open_error)
+			printf("[emu_ovl_cfg] failed to open INI %s for reading\n", ini_path);
 		return -1;
 	}
 
@@ -438,7 +461,8 @@ int emu_ovl_cfg_read_ini(EmuOvlConfig* cfg, const char* ini_path) {
 			for (int i = 0; i < sec->item_count; i++) {
 				EmuOvlItem* item = &sec->items[i];
 				const char* target_sec = get_ini_section_for_item(cfg, sec, item);
-				if (strcmp(target_sec, current_ini_section) != 0)
+				if (!ini_section_matches_read_mode(current_ini_section, target_sec,
+				                                   legacy_only))
 					continue;
 				if (strcmp(item->key, ini_key) != 0)
 					continue;
@@ -481,6 +505,13 @@ int emu_ovl_cfg_read_ini(EmuOvlConfig* cfg, const char* ini_path) {
 
 	fclose(f);
 	return 0;
+}
+
+int emu_ovl_cfg_read_ini(EmuOvlConfig* cfg, const char* ini_path) {
+	int legacy_rc = emu_ovl_cfg_read_ini_mode(cfg, ini_path, true, true);
+	if (legacy_rc != 0)
+		return legacy_rc;
+	return emu_ovl_cfg_read_ini_mode(cfg, ini_path, false, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -759,7 +790,8 @@ void emu_ovl_cfg_reset_all_to_defaults(EmuOvlConfig* cfg) {
 // Per-game config: flat "[section] key = value" file format
 // ---------------------------------------------------------------------------
 
-int emu_ovl_cfg_read_per_game(EmuOvlConfig* cfg, const char* path) {
+static int emu_ovl_cfg_read_per_game_mode(EmuOvlConfig* cfg, const char* path,
+                                          bool legacy_only) {
 	if (!cfg || !path)
 		return -1;
 	FILE* f = fopen(path, "r");
@@ -810,7 +842,8 @@ int emu_ovl_cfg_read_per_game(EmuOvlConfig* cfg, const char* path) {
 				if (strcmp(item->key, key) != 0)
 					continue;
 				const char* target = get_ini_section_for_item(cfg, sec, item);
-				if (strcmp(target, current_section) != 0)
+				if (!ini_section_matches_read_mode(current_section, target,
+				                                   legacy_only))
 					continue;
 
 				int v;
@@ -849,6 +882,13 @@ int emu_ovl_cfg_read_per_game(EmuOvlConfig* cfg, const char* path) {
 	}
 	fclose(f);
 	return 0;
+}
+
+int emu_ovl_cfg_read_per_game(EmuOvlConfig* cfg, const char* path) {
+	int rc = emu_ovl_cfg_read_per_game_mode(cfg, path, true);
+	if (rc != 0)
+		return rc;
+	return emu_ovl_cfg_read_per_game_mode(cfg, path, false);
 }
 
 int emu_ovl_cfg_write_per_game(EmuOvlConfig* cfg, const char* path) {

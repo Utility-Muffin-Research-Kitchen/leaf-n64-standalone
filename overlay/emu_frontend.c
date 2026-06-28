@@ -11,6 +11,10 @@
 #include <SDL2/SDL.h>
 
 #define LEAF_RESUME_STATE_SLOT 99
+#define LEAF_INPUT_SECTION "Leaf-Input"
+#define LEGACY_INPUT_SECTION "NextUI-Input"
+#define LEAF_SHORTCUT_SECTION "Leaf-Shortcuts"
+#define LEGACY_SHORTCUT_SECTION "NextUI-Shortcuts"
 
 // Frame skip: owned here, read by GLideN64 RSP.cpp via extern
 int g_frameSkip = 0;
@@ -27,6 +31,7 @@ static void handle_restore_defaults(void);
 
 // Forward declarations for shortcut system
 static ShortcutBinding* find_shortcut(const char* key);
+static bool shortcut_is_configurable(const ShortcutBinding* s);
 
 // Core API and plugin ops (set by emu_frontend_init)
 static EmuFrontendCoreAPI s_coreAPI;
@@ -47,7 +52,8 @@ static bool s_overlayConfigLoaded = false;
 static bool s_overlayConfigFailed = false;
 static char s_overlayJsonPath[512] = "";
 static char s_overlayIniPath[512] = "";
-static bool s_menuBtnPrev = false;
+static bool s_menuPressPending = false;
+static bool s_menuChordConsumed = false;
 static Uint8 s_prevHat = 0;
 static Uint32 s_prevButtons = 0;
 #define OVL_AXIS_DEADZONE 16000
@@ -61,10 +67,12 @@ static float s_hudFrameRate = 0.0f;
 static bool s_leafSaveQuitPending = false;
 static int s_leafSaveQuitDelayFrames = 0;
 static bool s_leafSaveQuitWaitingForState = false;
+static bool s_leafSaveQuitStatusShown = false;
 static Uint32 s_leafSaveQuitStartedAt = 0;
 static Uint32 s_leafSaveQuitLastPollAt = 0;
 static long long s_leafSaveQuitLastSize = -1;
 static int s_leafSaveQuitStablePolls = 0;
+static bool s_frontendSkipHostSwap = false;
 
 static int env_int_range(const char* name, int fallback, int min_value, int max_value) {
 	const char* value = getenv(name);
@@ -442,27 +450,36 @@ static int read_input_mode_file(void) {
 	FILE* f = fopen(path, "r");
 	if (!f) return -1;
 	char line[128];
-	int value = -1;
-	bool in_section = false;
+	int legacy_value = -1;
+	int leaf_value = -1;
+	int section_kind = 0; // 0=other, 1=legacy, 2=Leaf
 	while (fgets(line, sizeof(line), f)) {
 		char* trimmed = line;
 		while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
 		if (trimmed[0] == '[') {
-			in_section = (strncmp(trimmed, "[NextUI-Input]", 14) == 0);
+			if (strncmp(trimmed, "[" LEAF_INPUT_SECTION "]", sizeof("[" LEAF_INPUT_SECTION "]") - 1) == 0)
+				section_kind = 2;
+			else if (strncmp(trimmed, "[" LEGACY_INPUT_SECTION "]", sizeof("[" LEGACY_INPUT_SECTION "]") - 1) == 0)
+				section_kind = 1;
+			else
+				section_kind = 0;
 			continue;
 		}
-		if (in_section && strncmp(trimmed, "input_mode", 10) == 0) {
+		if (section_kind && strncmp(trimmed, "input_mode", 10) == 0) {
 			char* eq = strchr(trimmed, '=');
 			if (eq) {
 				char* val = eq + 1;
 				while (*val == ' ') val++;
-				value = (strncmp(val, "dpad", 4) == 0) ? 1 : 0;
-				break;
+				int parsed = (strncmp(val, "dpad", 4) == 0) ? 1 : 0;
+				if (section_kind == 2)
+					leaf_value = parsed;
+				else
+					legacy_value = parsed;
 			}
 		}
 	}
 	fclose(f);
-	return value;
+	return leaf_value >= 0 ? leaf_value : legacy_value;
 }
 
 // Write input_mode to the per-game config file, preserving other settings.
@@ -507,7 +524,8 @@ static void write_input_mode_file(int value) {
 			char* trimmed = linebuf;
 			while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
 			if (trimmed[0] == '[') {
-				in_section = (strncmp(trimmed, "[NextUI-Input]", 14) == 0);
+				in_section = (strncmp(trimmed, "[" LEAF_INPUT_SECTION "]",
+				                      sizeof("[" LEAF_INPUT_SECTION "]") - 1) == 0);
 				fprintf(f, "%s\n", linebuf);
 			} else if (in_section && strncmp(trimmed, "input_mode", 10) == 0 && strchr(trimmed, '=')) {
 				fprintf(f, "input_mode = %s\n", new_val);
@@ -520,7 +538,7 @@ static void write_input_mode_file(int value) {
 
 	if (!written) {
 		// Section or key didn't exist — append
-		fprintf(f, "\n[NextUI-Input]\ninput_mode = %s\n", new_val);
+		fprintf(f, "\n[" LEAF_INPUT_SECTION "]\ninput_mode = %s\n", new_val);
 	}
 	fclose(f);
 }
@@ -993,6 +1011,38 @@ ShortcutBinding* emu_frontend_get_shortcuts(void) {
 	return s_shortcuts;
 }
 
+static bool shortcut_is_configurable(const ShortcutBinding* s) {
+	return s && strcmp(s->key, "shortcut_game_switcher") != 0;
+}
+
+int emu_frontend_visible_shortcut_count(void) {
+	int count = 0;
+	for (int i = 0; i < SHORTCUT_COUNT; i++) {
+		if (shortcut_is_configurable(&s_shortcuts[i]))
+			count++;
+	}
+	return count;
+}
+
+int emu_frontend_visible_shortcut_storage_index(int visible_index) {
+	if (visible_index < 0)
+		return -1;
+	int visible = 0;
+	for (int i = 0; i < SHORTCUT_COUNT; i++) {
+		if (!shortcut_is_configurable(&s_shortcuts[i]))
+			continue;
+		if (visible == visible_index)
+			return i;
+		visible++;
+	}
+	return -1;
+}
+
+ShortcutBinding* emu_frontend_get_visible_shortcut(int visible_index) {
+	int storage_index = emu_frontend_visible_shortcut_storage_index(visible_index);
+	return storage_index >= 0 ? &s_shortcuts[storage_index] : NULL;
+}
+
 static ShortcutBinding* find_shortcut(const char* key) {
 	for (int i = 0; i < SHORTCUT_COUNT; i++)
 		if (strcmp(s_shortcuts[i].key, key) == 0)
@@ -1065,14 +1115,16 @@ bool emu_frontend_shortcut_is_held(const ShortcutBinding* s) {
 	return mod_is_held(s->mod);
 }
 
-// Persistence: write shortcuts to an INI file under [NextUI-Shortcuts]
+// Persistence: write configurable shortcuts to an INI file under [Leaf-Shortcuts]
 static void write_shortcuts_to_ini(const char* ini_path) {
 	if (!ini_path || ini_path[0] == '\0') return;
 	FILE* f = fopen(ini_path, "a");
 	if (!f) return;
-	fprintf(f, "\n[NextUI-Shortcuts]\n");
+	fprintf(f, "\n[" LEAF_SHORTCUT_SECTION "]\n");
 	for (int i = 0; i < SHORTCUT_COUNT; i++) {
 		ShortcutBinding* s = &s_shortcuts[i];
+		if (!shortcut_is_configurable(s))
+			continue;
 		if (s->physical < 0) {
 			fprintf(f, "%s = \"\"\n", s->key);
 		} else if (s->is_axis) {
@@ -1109,9 +1161,11 @@ static void write_bindings_per_game(FILE* f) {
 // Persistence: write shortcuts in standard INI format
 static void write_shortcuts_per_game(FILE* f) {
 	if (!f) return;
-	fprintf(f, "\n[NextUI-Shortcuts]\n");
+	fprintf(f, "\n[" LEAF_SHORTCUT_SECTION "]\n");
 	for (int i = 0; i < SHORTCUT_COUNT; i++) {
 		ShortcutBinding* s = &s_shortcuts[i];
+		if (!shortcut_is_configurable(s))
+			continue;
 		if (s->physical < 0) {
 			fprintf(f, "%s = \"\"\n", s->key);
 		} else if (s->is_axis) {
@@ -1125,8 +1179,7 @@ static void write_shortcuts_per_game(FILE* f) {
 	}
 }
 
-// Load shortcuts from a config file (standard INI with [NextUI-Shortcuts] section).
-static void load_shortcuts_from_file(const char* path) {
+static void load_shortcuts_from_file_section(const char* path, bool legacy) {
 	if (!path || path[0] == '\0') return;
 	FILE* f = fopen(path, "r");
 	if (!f) return;
@@ -1137,7 +1190,9 @@ static void load_shortcuts_from_file(const char* path) {
 		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' || line[len-1] == ' '))
 			line[--len] = '\0';
 		if (line[0] == '[') {
-			in_section = (strstr(line, "[NextUI-Shortcuts]") != NULL);
+			in_section = legacy
+				? (strstr(line, "[" LEGACY_SHORTCUT_SECTION "]") != NULL)
+				: (strstr(line, "[" LEAF_SHORTCUT_SECTION "]") != NULL);
 			continue;
 		}
 		if (!in_section) continue;
@@ -1156,10 +1211,10 @@ static void load_shortcuts_from_file(const char* path) {
 			char base_key[128];
 			snprintf(base_key, sizeof(base_key), "%.*s", klen - 4, key);
 			ShortcutBinding* s = find_shortcut(base_key);
-			if (s) s->mod = atoi(val);
+			if (shortcut_is_configurable(s)) s->mod = atoi(val);
 		} else {
 			ShortcutBinding* s = find_shortcut(key);
-			if (s) {
+			if (shortcut_is_configurable(s)) {
 				int phys, is_ax, ax_dir;
 				if (parse_binding_string(val, &phys, &is_ax, &ax_dir)) {
 					s->physical = phys;
@@ -1173,9 +1228,17 @@ static void load_shortcuts_from_file(const char* path) {
 	fclose(f);
 }
 
+// Load shortcuts from legacy first, then Leaf so Leaf wins regardless of file order.
+static void load_shortcuts_from_file(const char* path) {
+	load_shortcuts_from_file_section(path, true);
+	load_shortcuts_from_file_section(path, false);
+}
+
 // Reset all shortcuts to unbound
 static void reset_shortcuts_to_defaults(void) {
 	for (int i = 0; i < SHORTCUT_COUNT; i++) {
+		if (!shortcut_is_configurable(&s_shortcuts[i]))
+			continue;
 		s_shortcuts[i].physical = -1;
 		s_shortcuts[i].is_axis = 0;
 		s_shortcuts[i].axis_dir = 0;
@@ -1287,9 +1350,13 @@ static void capture_overlay_frame(void) {
 
 static void overlay_status_on_gl_thread(void* ctx) {
 	OverlayStatusCtx* status = (OverlayStatusCtx*)ctx;
+	if (s_overlay.render && s_overlay.render->hide_hud_plane)
+		s_overlay.render->hide_hud_plane();
 	emu_ovl_render_status(&s_overlay, status ? status->message : NULL);
-	if (s_pluginOps.swap_buffers)
+	if (s_pluginOps.swap_buffers) {
 		s_pluginOps.swap_buffers();
+		s_frontendSkipHostSwap = true;
+	}
 }
 
 static void render_overlay_status(const char* message) {
@@ -1323,12 +1390,14 @@ static void queue_leaf_resume_and_quit(void) {
 	s_leafSaveQuitPending = true;
 	s_leafSaveQuitDelayFrames = LEAF_SAVE_QUIT_DELAY_FRAMES;
 	s_leafSaveQuitWaitingForState = false;
+	s_leafSaveQuitStatusShown = false;
 	fprintf(stderr, "[Overlay] Save & Quit queued; waiting for gameplay frame\n");
 }
 
 static void finish_leaf_resume_and_quit(void) {
 	s_leafSaveQuitPending = false;
 	s_leafSaveQuitWaitingForState = false;
+	s_leafSaveQuitStatusShown = false;
 	render_overlay_status("Quitting...");
 	request_stop();
 }
@@ -1336,6 +1405,7 @@ static void finish_leaf_resume_and_quit(void) {
 static void start_leaf_resume_and_quit_save(void) {
 	capture_overlay_frame();
 	render_overlay_status("Saving...");
+	s_leafSaveQuitStatusShown = true;
 
 	int save_rc = save_state_slot(LEAF_RESUME_STATE_SLOT);
 	int thumb_rc = save_leaf_resume_thumbnail();
@@ -1403,8 +1473,12 @@ static bool poll_leaf_resume_state_settled(void) {
 static bool process_pending_leaf_save_quit(void) {
 	if (!s_leafSaveQuitPending)
 		return false;
+	s_frontendSkipHostSwap = true;
 	if (s_leafSaveQuitWaitingForState) {
-		render_overlay_status("Saving...");
+		if (!s_leafSaveQuitStatusShown) {
+			render_overlay_status("Saving...");
+			s_leafSaveQuitStatusShown = true;
+		}
 		poll_leaf_resume_state_settled();
 		return true;
 	}
@@ -1417,7 +1491,7 @@ static bool process_pending_leaf_save_quit(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Game switcher (save state + thumbnail + marker file + stop)
+// Game switcher handoff (Leaf saves slot 99 + thumbnail; legacy uses marker file)
 // ---------------------------------------------------------------------------
 
 static void trigger_game_switcher(void) {
@@ -1428,7 +1502,7 @@ static void trigger_game_switcher(void) {
 	save_state_slot(-1);
 	if (s_overlayInitialized)
 		emu_ovl_save_slot_screenshot(&s_overlay, s_currentSlot);
-	// NextUI checks existence (not content) to show the game switcher screen
+	// Legacy launchers check existence (not content) to show the game switcher screen.
 	FILE* f = fopen("/mnt/SDCARD/.userdata/shared/.minui/game_switcher.txt", "w");
 	if (f) { fprintf(f, "unused"); fclose(f); }
 	request_stop();
@@ -1790,7 +1864,7 @@ static void cheat_cycle_variant(int idx, int dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Shortcut handlers for reset / save / load / screenshot / game switcher
+// Shortcut handlers for reset / save / load / screenshot
 // ---------------------------------------------------------------------------
 
 static void process_state_shortcuts(void) {
@@ -1812,10 +1886,6 @@ static void process_state_shortcuts(void) {
 	if (emu_frontend_shortcut_just_pressed(find_shortcut("shortcut_screenshot"))) {
 		if (s_coreAPI.core_cmd)
 			s_coreAPI.core_cmd(M64CMD_TAKE_NEXT_SCREENSHOT, 0, NULL);
-	}
-
-	if (emu_frontend_shortcut_just_pressed(find_shortcut("shortcut_game_switcher"))) {
-		trigger_game_switcher();
 	}
 }
 
@@ -1906,7 +1976,7 @@ static void overlay_ensure_init(int w, int h) {
 		if (fs >= 0)
 			g_frameSkip = fs;
 
-		// Auto-resume: if launched from NextUI game switcher, load the requested state slot
+		// Auto-resume: if launched from Leaf recents/switcher, load the requested state slot
 		const char* resume = getenv("EMU_RESUME_SLOT");
 		if (resume && resume[0] != '\0' && s_coreAPI.core_cmd) {
 			int slot = atoi(resume);
@@ -1973,13 +2043,40 @@ static void overlay_ensure_init(int w, int h) {
 	fprintf(stderr, "[Overlay] Initialized successfully (%dx%d)\n", w, h);
 }
 
-static bool check_menu_button(void) {
-	if (!s_joy) return false;
+typedef enum {
+	EMU_MENU_ACTION_NONE = 0,
+	EMU_MENU_ACTION_OPEN_MENU,
+	EMU_MENU_ACTION_GAME_SWITCHER,
+} EmuMenuAction;
 
-	bool pressed = joystick_button_held(menu_button_index());
-	bool justPressed = pressed && !s_menuBtnPrev;
-	s_menuBtnPrev = pressed;
-	return justPressed;
+static EmuMenuAction poll_menu_action(void) {
+	int menu_btn = menu_button_index();
+	int select_btn = select_button_index();
+	bool menu_held = btn_is_held(menu_btn);
+	bool select_held = btn_is_held(select_btn);
+	bool menu_just_pressed = btn_just_pressed(menu_btn);
+	bool select_just_pressed = btn_just_pressed(select_btn);
+
+	if (menu_just_pressed) {
+		s_menuPressPending = true;
+		s_menuChordConsumed = false;
+	}
+
+	if (s_menuPressPending && !s_menuChordConsumed && menu_held &&
+	    ((select_btn != menu_btn && select_just_pressed) ||
+	     (select_held && menu_just_pressed))) {
+		s_menuChordConsumed = true;
+		return EMU_MENU_ACTION_GAME_SWITCHER;
+	}
+
+	if (s_menuPressPending && !menu_held) {
+		bool open_menu = !s_menuChordConsumed;
+		s_menuPressPending = false;
+		s_menuChordConsumed = false;
+		return open_menu ? EMU_MENU_ACTION_OPEN_MENU : EMU_MENU_ACTION_NONE;
+	}
+
+	return EMU_MENU_ACTION_NONE;
 }
 
 static EmuOvlInput poll_overlay_input(void) {
@@ -2072,7 +2169,8 @@ static EmuOvlAction run_overlay_loop(void) {
 	}
 	SDL_Event ev;
 	while (SDL_PollEvent(&ev)) {}
-	s_menuBtnPrev = true; // prevent re-trigger
+	s_menuPressPending = false;
+	s_menuChordConsumed = false;
 
 	// Menu loop: input polled here, update+render+swap dispatched to video thread
 	while (emu_ovl_is_active(&s_overlay)) {
@@ -2092,8 +2190,7 @@ static EmuOvlAction run_overlay_loop(void) {
 		s_pluginOps.exec_on_video_thread(overlay_frame_on_gl_thread, &input);
 
 		// Dispatch save-scope actions inline (menu stays open, matching
-		// NextUI's OptionSaveChanges_onConfirm which calls Config_write
-		// synchronously and then returns to the menu). Without this, the
+		// Leaf's synchronous Save Changes behavior). Without this, the
 		// save action set by the Save Changes submenu would be overwritten
 		// by EMU_OVL_ACTION_CONTINUE when the user eventually closes the
 		// menu via B.
@@ -2341,7 +2438,9 @@ static EmuOvlAction run_overlay_loop(void) {
 							s_shortcuts[sc_idx].mod = m->mod;
 						}
 						// Auto-advance
-						if (s_overlay.selected + 1 < SHORTCUT_COUNT)
+						EmuOvlSection* sec = &s_overlayConfig.sections[s_overlay.current_section];
+						int shortcut_end = sec->item_count + emu_frontend_visible_shortcut_count();
+						if (s_overlay.selected + 1 < shortcut_end)
 							s_overlay.selected++;
 					}
 					s_overlay.bind_capture = -1;
@@ -2614,7 +2713,8 @@ EmuOvlConfig* emu_frontend_get_overlay_config(void) {
 	return &s_overlayConfig;
 }
 
-void emu_frontend_frame(int w, int h) {
+bool emu_frontend_frame(int w, int h) {
+	s_frontendSkipHostSwap = false;
 	ensure_overlay_joystick_open();
 
 	// Power button: sleep on short press, poweroff on long press
@@ -2624,13 +2724,20 @@ void emu_frontend_frame(int w, int h) {
 	} else if (pwr == 2) {
 		system("touch /tmp/poweroff");
 		request_stop();
+		return true;
 	}
 
 	// Shortcut button processing
 	emu_frontend_update_buttons();
+	EmuMenuAction menu_action = poll_menu_action();
+	if (menu_action == EMU_MENU_ACTION_GAME_SWITCHER)
+		trigger_game_switcher();
 
+	overlay_ensure_init(w, h);
 	if (process_pending_leaf_save_quit())
-		return;
+		return true;
+	if (menu_action == EMU_MENU_ACTION_GAME_SWITCHER)
+		return true;
 
 	if (s_overlayConfigLoaded) {
 		process_fast_forward();
@@ -2642,13 +2749,14 @@ void emu_frontend_frame(int w, int h) {
 	}
 
 	// Overlay menu: ensure loaded, then handle menu button press
-	overlay_ensure_init(w, h);
-	if (s_overlayInitialized && check_menu_button()) {
+	if (s_overlayInitialized && menu_action == EMU_MENU_ACTION_OPEN_MENU) {
 		if (s_overlay.render && s_overlay.render->hide_hud_plane)
 			s_overlay.render->hide_hud_plane();
 		EmuOvlAction action = run_overlay_loop();
 		handle_overlay_action(action);
 	}
+
+	return s_frontendSkipHostSwap || s_leafSaveQuitPending;
 }
 
 static bool hud_option_enabled(const char* key) {

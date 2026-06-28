@@ -83,7 +83,7 @@
             "Auto"
           ],
           "default": 2,
-          "ini_section": "NextUI"
+          "ini_section": "Leaf"
         },
         {
           "key": "frame_skip",
@@ -103,7 +103,7 @@
             "30fps"
           ],
           "default": 0,
-          "ini_section": "NextUI"
+          "ini_section": "Leaf"
         },
         {
           "key": "rewind_buffer",
@@ -123,7 +123,7 @@
             "Large (30s)"
           ],
           "default": 0,
-          "ini_section": "NextUI"
+          "ini_section": "Leaf"
         },
         {
           "key": "VideoPlugin",
@@ -139,7 +139,7 @@
             "Rice"
           ],
           "default": 1,
-          "ini_section": "NextUI"
+          "ini_section": "Leaf"
         }
       ]
     },
@@ -160,7 +160,7 @@
             "D-Pad"
           ],
           "default": 0,
-          "ini_section": "NextUI-Input"
+          "ini_section": "Leaf-Input"
         }
       ]
     },

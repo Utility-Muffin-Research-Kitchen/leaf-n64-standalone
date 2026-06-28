@@ -195,8 +195,11 @@ export EMU_OVERLAY_INI="$DEVICE_CONFIG_DIR/mupen64plus.cfg"
 export EMU_OVERLAY_GAME="${ROM_BASE%.*}"
 export EMU_DEFAULT_CFG="$BIN_DIR/default.cfg"
 
-# ── Video plugin selection (reads [NextUI] VideoPlugin from mupen64plus.cfg) ─
-VIDEO_PLUGIN_VALUE=$("$BIN_DIR/ini" get "$DEVICE_CFG" "NextUI" "VideoPlugin" 2>/dev/null)
+# ── Video plugin selection (reads [Leaf], falling back to legacy [NextUI]) ───
+VIDEO_PLUGIN_VALUE=$("$BIN_DIR/ini" get "$DEVICE_CFG" "Leaf" "VideoPlugin" 2>/dev/null || true)
+if [ -z "$VIDEO_PLUGIN_VALUE" ]; then
+    VIDEO_PLUGIN_VALUE=$("$BIN_DIR/ini" get "$DEVICE_CFG" "NextUI" "VideoPlugin" 2>/dev/null || true)
+fi
 case "$VIDEO_PLUGIN_VALUE" in
     0)
         GFX_PLUGIN="mupen64plus-video-GLideN64.so"

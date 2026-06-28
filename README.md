@@ -22,11 +22,12 @@ canonical `Roms/N64` library, stores battery saves under `Saves/N64`, and stores
 standalone state/config under the shared Leaf runtime-path contract.
 
 MLP1 controls use the Loong Gamepad SDL joystick layout captured by Catastrophe:
-Menu opens the standalone overlay on button 10, Select is button 8, Start is
-button 9, L/R are buttons 4/5, L2/R2 are buttons 6/7, the d-pad is SDL hat 0,
-and C-buttons are available with R2 + ABXY. The overlay opens SDL joystick
-index 0 by default, logs the selected joystick in `mupen64plus.log`, and can be
-pointed at another SDL index for QA with `EMU_OVERLAY_JOYSTICK_INDEX`.
+Menu opens the standalone overlay on button 10, Menu + Select performs Leaf's
+standalone game-switcher handoff, Select is button 8, Start is button 9, L/R
+are buttons 4/5, L2/R2 are buttons 6/7, the d-pad is SDL hat 0, and C-buttons
+are available with R2 + ABXY. The overlay opens SDL joystick index 0 by default,
+logs the selected joystick in `mupen64plus.log`, and can be pointed at another
+SDL index for QA with `EMU_OVERLAY_JOYSTICK_INDEX`.
 
 The original upstream README follows for historical context.
 
