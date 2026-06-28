@@ -64,6 +64,19 @@ typedef struct EmuOvlRenderBackend {
 	int (*icon_height)(int icon_id);
 	// Save captured frame as BMP
 	int (*save_captured_frame)(const char* path);
+	// Lightweight always-on HUD path. Unlike begin_frame/end_frame this must not
+	// upload a full-screen surface every frame; backends may cache the box.
+	void (*draw_hud_box)(const char* const* lines, int line_count,
+	                     int x, int y, int w, int h, int radius,
+	                     int pad_x, int pad_y, int line_gap,
+	                     uint32_t panel_color, uint32_t text_color, int font_id);
+	// Optional KMS/DRM plane HUD path. This is for renderers whose GL state
+	// tracking cannot tolerate per-frame overlay draws.
+	int (*draw_hud_plane_box)(const char* const* lines, int line_count,
+	                          int x, int y, int w, int h, int radius,
+	                          int pad_x, int pad_y, int line_gap,
+	                          uint32_t panel_color, uint32_t text_color, int font_id);
+	void (*hide_hud_plane)(void);
 } EmuOvlRenderBackend;
 
 // Returns the LARGE-tier font pixel size from the active Jawaka/Catastrophe

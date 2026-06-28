@@ -225,7 +225,7 @@ index 00000000..82791025
 +- `UseNativeResolutionFactor = 2` (640x480) works well
 +- Can try `anisotropy = 4` or `UseNativeResolutionFactor = 3` on less demanding games
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index ff7e8a52..dc80b32a 100644
+index ff7e8a52..6f560aad 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -147,6 +147,18 @@ set(GLideN64_SOURCES
@@ -256,18 +256,21 @@ index ff7e8a52..dc80b32a 100644
  endif(EXISTS "${CMAKE_FIND_ROOT_PATH}/opt/vc/include/bcm_host.h" AND NOT MESA)
  
  if(MUPENPLUSAPI)
-@@ -244,6 +256,10 @@ if(MUPENPLUSAPI)
+@@ -244,6 +256,13 @@ if(MUPENPLUSAPI)
  		-DTXFILTER_LIB
    )
    include_directories( . inc )
 +  include_directories(${OVERLAY_COMMON_DIR})
-+  # SDL2, SDL_ttf, and libpng for overlay menu rendering
++  # SDL2 and SDL_ttf for overlay menu rendering
 +  include_directories(${SDL_TTF_INCLUDE_DIRS})
-+  include_directories(${PNG_PNG_INCLUDE_DIR})
++  if(LIBDRM_LIBRARIES)
++    include_directories(${LIBDRM_INCLUDE_DIRS})
++    add_definitions(-DEMU_OVL_ENABLE_DRM_HUD)
++  endif()
    set(GLideN64_SOURCES_UNIX
  	MupenPlusPluginAPI.cpp
  	mupenplus/CommonAPIImpl_mupenplus.cpp
-@@ -405,42 +420,45 @@ if(ANDROID)
+@@ -405,42 +424,45 @@ if(ANDROID)
  endif(ANDROID)
  
  if(NOT NO_OSD)
@@ -349,7 +352,7 @@ index ff7e8a52..dc80b32a 100644
  
    include_directories( ${FREETYPE_INCLUDE_DIRS} )
  else()
-@@ -559,6 +577,10 @@ if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" MATCH
+@@ -559,6 +581,10 @@ if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" MATCH
    set( CMAKE_SHARED_LINKER_FLAGS  "${CMAKE_SHARED_LINKER_FLAGS} ${GCC_STATIC_LINK_FLAGS}" )
  endif()
  
@@ -360,12 +363,12 @@ index ff7e8a52..dc80b32a 100644
  set(CMAKE_CXX_STANDARD 17)
  set(CMAKE_CXX_STANDARD_REQUIRED YES)
  
-@@ -628,6 +650,9 @@ else(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
+@@ -628,6 +654,9 @@ else(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
    endif(SDL)
  endif(GLIDEN64_BUILD_TYPE STREQUAL "Debug")
  
-+# SDL2 + SDL_ttf + libpng for overlay menu rendering and Leaf resume thumbnails
-+target_link_libraries(${GLideN64_DLL_NAME} -lSDL2 -lSDL2_ttf -lpng16 -lz)
++# SDL2 + SDL_ttf for overlay menu rendering (needed regardless of SDL display mode)
++target_link_libraries(${GLideN64_DLL_NAME} -lSDL2 -lSDL2_ttf ${LIBDRM_LIBRARIES})
 +
  if(UNIX AND NOT APPLE AND NOT ANDROID)
  	install(TARGETS ${GLideN64_DLL_NAME}
@@ -480,7 +483,7 @@ index 701d27d2..e6ad4c80 100644
  
  #endif // DISPLAYLOADPROGRESS_H
 diff --git a/src/DisplayWindow.cpp b/src/DisplayWindow.cpp
-index 59725f62..1258e5c6 100644
+index 59725f62..d4029d14 100644
 --- a/src/DisplayWindow.cpp
 +++ b/src/DisplayWindow.cpp
 @@ -1,5 +1,6 @@
@@ -490,7 +493,7 @@ index 59725f62..1258e5c6 100644
  #include "Config.h"
  #include "RSP.h"
  #include "VI.h"
-@@ -8,6 +9,125 @@
+@@ -8,6 +9,120 @@
  #include "PluginAPI.h"
  #include "FrameBuffer.h"
  
@@ -580,16 +583,11 @@ index 59725f62..1258e5c6 100644
 +typedef struct {
 +	int w;
 +	int h;
-+} HudRenderCtx;
++} Gliden64HudCtx;
 +
-+static void gliden64_render_hud_on_gl_thread(void* data) {
-+	HudRenderCtx* ctx = (HudRenderCtx*)data;
-+	emu_frontend_render_hud(ctx->w, ctx->h);
-+}
-+
-+static void gliden64_render_hud(int w, int h) {
-+	HudRenderCtx ctx = { w, h };
-+	gliden64_exec_on_video_thread(gliden64_render_hud_on_gl_thread, &ctx);
++static void gliden64_render_hud_on_video_thread(void* ctx) {
++	Gliden64HudCtx* hud = (Gliden64HudCtx*)ctx;
++	emu_frontend_render_hud(hud->w, hud->h);
 +}
 +
 +static bool s_frontendInitialized = false;
@@ -616,7 +614,7 @@ index 59725f62..1258e5c6 100644
  bool DisplayWindow::start()
  {
  	if (!_start())
-@@ -48,6 +168,15 @@ void DisplayWindow::swapBuffers()
+@@ -48,6 +163,17 @@ void DisplayWindow::swapBuffers()
  {
  	m_drawer.drawOSD();
  	m_drawer.clearStatistics();
@@ -625,10 +623,12 @@ index 59725f62..1258e5c6 100644
 +	// live in overlay/emu_frontend.c. Skip during texture loading to avoid
 +	// GL state corruption while hi-res textures are being indexed.
 +	ensure_frontend_init();
-+	if (!isLoadProgressActive())
++	if (!isLoadProgressActive()) {
 +		emu_frontend_frame(getScreenWidth(), getScreenHeight());
++		Gliden64HudCtx hud = {(int)getScreenWidth(), (int)getScreenHeight()};
++		gliden64_exec_on_video_thread(gliden64_render_hud_on_video_thread, &hud);
++	}
 +
-+	gliden64_render_hud(getScreenWidth(), getScreenHeight());
  	_swapBuffers();
  	if (!RSP.LLE) {
  		if ((config.generalEmulation.hacks & hack_doNotResetOtherModeL) == 0)

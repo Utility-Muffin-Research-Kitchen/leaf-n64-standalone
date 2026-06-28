@@ -12,10 +12,12 @@
 #include "emu_overlay_sdl.h"
 
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_ttf.h>
 #include <GLES3/gl3.h>
 #include <png.h>
 
+#include <errno.h>
 #include <math.h>
 #include <setjmp.h>
 #include <stdlib.h>
@@ -23,6 +25,15 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+
+#ifdef EMU_OVL_ENABLE_DRM_HUD
+#include <drm.h>
+#include <drm_fourcc.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // GLES3 VAO function pointers — loaded via SDL_GL_GetProcAddress to avoid
@@ -82,6 +93,46 @@ static GLuint s_texVBO = 0;
 
 // Pixel conversion buffer (ARGB -> RGBA for GL upload)
 static uint8_t* s_uploadBuffer = NULL;
+
+// Always-on HUD cache: a tiny SDL surface uploaded only when the text changes.
+static SDL_Surface* s_hudSurface = NULL;
+static uint8_t* s_hudUploadBuffer = NULL;
+static GLuint s_hudTexture = 0;
+static GLuint s_hudVAO = 0;
+static GLuint s_hudVBO = 0;
+static int s_hudW = 0;
+static int s_hudH = 0;
+static char s_hudCacheKey[512] = "";
+
+static void ovl_sdl_hud_destroy(void);
+
+#ifdef EMU_OVL_ENABLE_DRM_HUD
+typedef struct {
+	int attempted;
+	int ready;
+	int fd;
+	uint32_t crtc_id;
+	uint32_t connector_id;
+	uint32_t plane_id;
+	uint32_t fb_id;
+	uint32_t handle;
+	uint32_t format;
+	uint32_t pitch;
+	uint64_t size;
+	void* map;
+	int w;
+	int h;
+	int visible;
+	int dst_x;
+	int dst_y;
+	char cache_key[1024];
+} OvlDrmHudState;
+
+static OvlDrmHudState s_drmHud = {
+	0, 0, -1, 0, 0, 0, 0, 0, DRM_FORMAT_ARGB8888, 0, 0, NULL, 0, 0, 0, 0, 0, ""};
+
+static void ovl_sdl_drm_destroy_buffer(void);
+#endif
 
 // Icon storage (PNG images for button hints + slot screenshots)
 #define MAX_ICONS 16
@@ -734,6 +785,13 @@ static int ovl_sdl_init(int screen_w, int screen_h) {
 
 static void ovl_sdl_destroy(void) {
 	present_destroy();
+	ovl_sdl_hud_destroy();
+#ifdef EMU_OVL_ENABLE_DRM_HUD
+	ovl_sdl_drm_destroy_buffer();
+	memset(&s_drmHud, 0, sizeof(s_drmHud));
+	s_drmHud.fd = -1;
+	s_drmHud.format = DRM_FORMAT_ARGB8888;
+#endif
 
 	for (int i = 0; i < EMU_OVL_FONT_COUNT; i++) {
 		if (s_fonts[i]) {
@@ -1235,6 +1293,817 @@ static void ovl_sdl_end_frame(void) {
 }
 
 // ---------------------------------------------------------------------------
+// draw_hud_box — tiny cached texture path for always-on counters
+// ---------------------------------------------------------------------------
+
+static void ovl_sdl_hud_destroy(void) {
+	if (s_hudSurface) {
+		SDL_FreeSurface(s_hudSurface);
+		s_hudSurface = NULL;
+	}
+	free(s_hudUploadBuffer);
+	s_hudUploadBuffer = NULL;
+	if (s_hudVAO) {
+		pfn_glDeleteVertexArrays(1, &s_hudVAO);
+		s_hudVAO = 0;
+	}
+	if (s_hudVBO) {
+		glDeleteBuffers(1, &s_hudVBO);
+		s_hudVBO = 0;
+	}
+	if (s_hudTexture) {
+		glDeleteTextures(1, &s_hudTexture);
+		s_hudTexture = 0;
+	}
+	s_hudW = 0;
+	s_hudH = 0;
+	s_hudCacheKey[0] = '\0';
+}
+
+static int ovl_sdl_hud_ensure_surface(int w, int h) {
+	if (w <= 0 || h <= 0)
+		return -1;
+	if (s_hudSurface && s_hudW == w && s_hudH == h && s_hudUploadBuffer)
+		return 0;
+
+	if (s_hudSurface) {
+		SDL_FreeSurface(s_hudSurface);
+		s_hudSurface = NULL;
+	}
+	free(s_hudUploadBuffer);
+	s_hudUploadBuffer = NULL;
+
+	s_hudSurface = SDL_CreateRGBSurfaceWithFormat(
+		0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+	if (!s_hudSurface)
+		return -1;
+
+	s_hudUploadBuffer = (uint8_t*)malloc((size_t)w * (size_t)h * 4);
+	if (!s_hudUploadBuffer) {
+		SDL_FreeSurface(s_hudSurface);
+		s_hudSurface = NULL;
+		return -1;
+	}
+
+	s_hudW = w;
+	s_hudH = h;
+	s_hudCacheKey[0] = '\0';
+	return 0;
+}
+
+static int ovl_sdl_hud_ensure_gl(void) {
+	if (!s_texProgram)
+		return -1;
+
+	if (!s_hudTexture) {
+		glGenTextures(1, &s_hudTexture);
+		glBindTexture(GL_TEXTURE_2D, s_hudTexture);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+
+	if (!s_hudVAO || !s_hudVBO) {
+		if (!s_hudVAO)
+			pfn_glGenVertexArrays(1, &s_hudVAO);
+		if (!s_hudVBO)
+			glGenBuffers(1, &s_hudVBO);
+
+		pfn_glBindVertexArray(s_hudVAO);
+		glBindBuffer(GL_ARRAY_BUFFER, s_hudVBO);
+		glBufferData(GL_ARRAY_BUFFER, 6 * 4 * (GLsizeiptr)sizeof(float),
+					 NULL, GL_DYNAMIC_DRAW);
+		GLint posLoc = glGetAttribLocation(s_texProgram, "aPos");
+		GLint uvLoc = glGetAttribLocation(s_texProgram, "aTexCoord");
+		glEnableVertexAttribArray(posLoc);
+		glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE,
+							  4 * (GLsizei)sizeof(float), (void*)0);
+		glEnableVertexAttribArray(uvLoc);
+		glVertexAttribPointer(uvLoc, 2, GL_FLOAT, GL_FALSE,
+							  4 * (GLsizei)sizeof(float),
+							  (void*)(2 * sizeof(float)));
+		pfn_glBindVertexArray(0);
+	}
+
+	return 0;
+}
+
+static void ovl_sdl_hud_make_key(char* key, size_t key_size,
+								 const char* const* lines, int line_count,
+								 int w, int h, int radius,
+								 int pad_x, int pad_y, int line_gap,
+								 uint32_t panel_color, uint32_t text_color,
+								 int font_id) {
+	if (!key || key_size == 0)
+		return;
+	int off = snprintf(key, key_size,
+					   "%d:%d:%d:%d:%d:%d:%08x:%08x:%d:%d",
+					   w, h, radius, pad_x, pad_y, line_gap,
+					   panel_color, text_color, font_id, line_count);
+	if (off < 0)
+		off = 0;
+	if (off >= (int)key_size)
+		off = (int)key_size - 1;
+	for (int i = 0; i < line_count && off < (int)key_size - 1; i++) {
+		int wrote = snprintf(key + off, key_size - (size_t)off,
+							 "|%s", lines[i] ? lines[i] : "");
+		if (wrote < 0)
+			break;
+		off += wrote;
+		if (off >= (int)key_size)
+			off = (int)key_size - 1;
+	}
+	key[key_size - 1] = '\0';
+}
+
+static void ovl_sdl_hud_render_surface(const char* const* lines, int line_count,
+									   int w, int h, int radius,
+									   int pad_x, int pad_y, int line_gap,
+									   uint32_t panel_color, uint32_t text_color,
+									   int font_id) {
+	SDL_FillRect(s_hudSurface, NULL, 0x00000000u);
+
+	SDL_Surface* previous = s_renderSurface;
+	s_renderSurface = s_hudSurface;
+	ovl_sdl_draw_rounded_rect(0, 0, w, h, radius, panel_color);
+	int text_y = pad_y;
+	for (int i = 0; i < line_count; i++) {
+		ovl_sdl_draw_text(lines[i], pad_x, text_y, text_color, font_id);
+		text_y += ovl_sdl_text_height(font_id) + line_gap;
+	}
+	s_renderSurface = previous;
+}
+
+#ifdef EMU_OVL_ENABLE_DRM_HUD
+static const char* ovl_sdl_drm_format_name(uint32_t fmt) {
+	switch (fmt) {
+	case DRM_FORMAT_ARGB8888:
+		return "ARGB8888";
+	case DRM_FORMAT_XRGB8888:
+		return "XRGB8888";
+	default:
+		return "unknown";
+	}
+}
+
+static SDL_Window* ovl_sdl_find_kms_window(void) {
+	for (uint32_t id = 1; id < 1024; id++) {
+		SDL_Window* window = SDL_GetWindowFromID(id);
+		if (!window)
+			continue;
+		SDL_SysWMinfo info;
+		SDL_VERSION(&info.version);
+		if (!SDL_GetWindowWMInfo(window, &info))
+			continue;
+		if (info.subsystem == SDL_SYSWM_KMSDRM && info.info.kmsdrm.drm_fd >= 0)
+			return window;
+	}
+	return NULL;
+}
+
+static int ovl_sdl_drm_fd_from_sdl(void) {
+	SDL_Window* window = ovl_sdl_find_kms_window();
+	if (!window)
+		return -1;
+	SDL_SysWMinfo info;
+	SDL_VERSION(&info.version);
+	if (!SDL_GetWindowWMInfo(window, &info))
+		return -1;
+	if (info.subsystem != SDL_SYSWM_KMSDRM)
+		return -1;
+	return info.info.kmsdrm.drm_fd;
+}
+
+static int ovl_sdl_drm_find_crtc(int fd, uint32_t* out_crtc, uint32_t* out_connector,
+								 int* out_crtc_index) {
+	drmModeRes* res = drmModeGetResources(fd);
+	if (!res)
+		return -1;
+
+	uint32_t crtc_id = 0;
+	uint32_t connector_id = 0;
+	for (int i = 0; i < res->count_connectors && !crtc_id; i++) {
+		drmModeConnector* conn = drmModeGetConnector(fd, res->connectors[i]);
+		if (!conn)
+			continue;
+		if (conn->connection == DRM_MODE_CONNECTED && conn->encoder_id) {
+			drmModeEncoder* enc = drmModeGetEncoder(fd, conn->encoder_id);
+			if (enc && enc->crtc_id) {
+				crtc_id = enc->crtc_id;
+				connector_id = conn->connector_id;
+			}
+			if (enc)
+				drmModeFreeEncoder(enc);
+		}
+		drmModeFreeConnector(conn);
+	}
+
+	if (!crtc_id) {
+		for (int i = 0; i < res->count_crtcs; i++) {
+			drmModeCrtc* crtc = drmModeGetCrtc(fd, res->crtcs[i]);
+			if (crtc && crtc->mode_valid) {
+				crtc_id = crtc->crtc_id;
+				drmModeFreeCrtc(crtc);
+				break;
+			}
+			if (crtc)
+				drmModeFreeCrtc(crtc);
+		}
+	}
+
+	int crtc_index = -1;
+	for (int i = 0; i < res->count_crtcs; i++) {
+		if (res->crtcs[i] == crtc_id) {
+			crtc_index = i;
+			break;
+		}
+	}
+	drmModeFreeResources(res);
+
+	if (!crtc_id || crtc_index < 0)
+		return -1;
+	*out_crtc = crtc_id;
+	*out_connector = connector_id;
+	*out_crtc_index = crtc_index;
+	return 0;
+}
+
+static int ovl_sdl_drm_plane_type(int fd, uint32_t plane_id) {
+	drmModeObjectProperties* props =
+		drmModeObjectGetProperties(fd, plane_id, DRM_MODE_OBJECT_PLANE);
+	if (!props)
+		return 0;
+
+	int type = 0; // 1=overlay, 2=cursor, 3=primary
+	for (uint32_t i = 0; i < props->count_props; i++) {
+		drmModePropertyPtr prop = drmModeGetProperty(fd, props->props[i]);
+		if (!prop)
+			continue;
+		if (strcmp(prop->name, "type") == 0) {
+			uint64_t value = props->prop_values[i];
+			for (int j = 0; j < prop->count_enums; j++) {
+				if (prop->enums[j].value != value)
+					continue;
+				if (strcmp(prop->enums[j].name, "Overlay") == 0)
+					type = 1;
+				else if (strcmp(prop->enums[j].name, "Cursor") == 0)
+					type = 2;
+				else if (strcmp(prop->enums[j].name, "Primary") == 0)
+					type = 3;
+				break;
+			}
+		}
+		drmModeFreeProperty(prop);
+		if (type)
+			break;
+	}
+	drmModeFreeObjectProperties(props);
+	return type;
+}
+
+static int ovl_sdl_drm_plane_format(drmModePlane* plane, uint32_t* out_format) {
+	for (uint32_t i = 0; i < plane->count_formats; i++) {
+		if (plane->formats[i] == DRM_FORMAT_ARGB8888) {
+			*out_format = DRM_FORMAT_ARGB8888;
+			return 0;
+		}
+	}
+	for (uint32_t i = 0; i < plane->count_formats; i++) {
+		if (plane->formats[i] == DRM_FORMAT_XRGB8888) {
+			*out_format = DRM_FORMAT_XRGB8888;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static int ovl_sdl_drm_select_plane(int fd, int crtc_index,
+									uint32_t* out_plane, uint32_t* out_format) {
+	(void)drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+
+	drmModePlaneRes* planes = drmModeGetPlaneResources(fd);
+	if (!planes)
+		return -1;
+
+	uint32_t selected = 0;
+	uint32_t selected_format = 0;
+	for (int desired = 1; desired <= 2 && !selected; desired++) {
+		for (uint32_t i = 0; i < planes->count_planes && !selected; i++) {
+			drmModePlane* plane = drmModeGetPlane(fd, planes->planes[i]);
+			if (!plane)
+				continue;
+			if ((plane->possible_crtcs & (1u << crtc_index)) == 0) {
+				drmModeFreePlane(plane);
+				continue;
+			}
+			int type = ovl_sdl_drm_plane_type(fd, plane->plane_id);
+			if (type != desired) {
+				drmModeFreePlane(plane);
+				continue;
+			}
+			uint32_t fmt = 0;
+			if (ovl_sdl_drm_plane_format(plane, &fmt) == 0) {
+				selected = plane->plane_id;
+				selected_format = fmt;
+			}
+			drmModeFreePlane(plane);
+		}
+	}
+	drmModeFreePlaneResources(planes);
+
+	if (!selected)
+		return -1;
+	*out_plane = selected;
+	*out_format = selected_format;
+	return 0;
+}
+
+static int ovl_sdl_drm_init(void) {
+	if (s_drmHud.attempted)
+		return s_drmHud.ready ? 0 : -1;
+	s_drmHud.attempted = 1;
+
+	int fd = ovl_sdl_drm_fd_from_sdl();
+	if (fd < 0) {
+		fprintf(stderr, "[OverlayDRM] no SDL KMSDRM window/fd available\n");
+		return -1;
+	}
+
+	uint32_t crtc = 0, connector = 0, plane = 0, format = 0;
+	int crtc_index = -1;
+	if (ovl_sdl_drm_find_crtc(fd, &crtc, &connector, &crtc_index) != 0) {
+		fprintf(stderr, "[OverlayDRM] could not find active CRTC\n");
+		return -1;
+	}
+	if (ovl_sdl_drm_select_plane(fd, crtc_index, &plane, &format) != 0) {
+		fprintf(stderr, "[OverlayDRM] no compatible overlay/cursor plane for CRTC %u\n", crtc);
+		return -1;
+	}
+
+	s_drmHud.fd = fd;
+	s_drmHud.crtc_id = crtc;
+	s_drmHud.connector_id = connector;
+	s_drmHud.plane_id = plane;
+	s_drmHud.format = format;
+	s_drmHud.ready = 1;
+	fprintf(stderr, "[OverlayDRM] plane=%u crtc=%u connector=%u format=%s\n",
+			plane, crtc, connector, ovl_sdl_drm_format_name(format));
+	return 0;
+}
+
+static void ovl_sdl_drm_destroy_buffer(void) {
+	if (s_drmHud.fd < 0)
+		return;
+	if (s_drmHud.visible) {
+		drmModeSetPlane(s_drmHud.fd, s_drmHud.plane_id, s_drmHud.crtc_id,
+						0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+		s_drmHud.visible = 0;
+	}
+	if (s_drmHud.map && s_drmHud.map != MAP_FAILED) {
+		munmap(s_drmHud.map, (size_t)s_drmHud.size);
+		s_drmHud.map = NULL;
+	}
+	if (s_drmHud.fb_id) {
+		drmModeRmFB(s_drmHud.fd, s_drmHud.fb_id);
+		s_drmHud.fb_id = 0;
+	}
+	if (s_drmHud.handle) {
+		struct drm_mode_destroy_dumb destroy;
+		memset(&destroy, 0, sizeof(destroy));
+		destroy.handle = s_drmHud.handle;
+		ioctl(s_drmHud.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		s_drmHud.handle = 0;
+	}
+	s_drmHud.pitch = 0;
+	s_drmHud.size = 0;
+	s_drmHud.w = 0;
+	s_drmHud.h = 0;
+	s_drmHud.cache_key[0] = '\0';
+}
+
+static int ovl_sdl_drm_ensure_buffer(int w, int h) {
+	if (w <= 0 || h <= 0)
+		return -1;
+	if (s_drmHud.fb_id && s_drmHud.map && s_drmHud.w == w && s_drmHud.h == h)
+		return 0;
+
+	ovl_sdl_drm_destroy_buffer();
+
+	struct drm_mode_create_dumb create;
+	memset(&create, 0, sizeof(create));
+	create.width = (uint32_t)w;
+	create.height = (uint32_t)h;
+	create.bpp = 32;
+	if (ioctl(s_drmHud.fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) != 0) {
+		fprintf(stderr, "[OverlayDRM] CREATE_DUMB %dx%d failed: %s\n",
+				w, h, strerror(errno));
+		return -1;
+	}
+
+	uint32_t handles[4] = {create.handle, 0, 0, 0};
+	uint32_t pitches[4] = {create.pitch, 0, 0, 0};
+	uint32_t offsets[4] = {0, 0, 0, 0};
+	uint32_t fb = 0;
+	if (drmModeAddFB2(s_drmHud.fd, (uint32_t)w, (uint32_t)h, s_drmHud.format,
+					  handles, pitches, offsets, &fb, 0) != 0) {
+		fprintf(stderr, "[OverlayDRM] AddFB2 %dx%d %s failed: %s\n",
+				w, h, ovl_sdl_drm_format_name(s_drmHud.format), strerror(errno));
+		struct drm_mode_destroy_dumb destroy;
+		memset(&destroy, 0, sizeof(destroy));
+		destroy.handle = create.handle;
+		ioctl(s_drmHud.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		return -1;
+	}
+
+	struct drm_mode_map_dumb map;
+	memset(&map, 0, sizeof(map));
+	map.handle = create.handle;
+	if (ioctl(s_drmHud.fd, DRM_IOCTL_MODE_MAP_DUMB, &map) != 0) {
+		fprintf(stderr, "[OverlayDRM] MAP_DUMB failed: %s\n", strerror(errno));
+		drmModeRmFB(s_drmHud.fd, fb);
+		struct drm_mode_destroy_dumb destroy;
+		memset(&destroy, 0, sizeof(destroy));
+		destroy.handle = create.handle;
+		ioctl(s_drmHud.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		return -1;
+	}
+
+	void* mem = mmap(NULL, create.size, PROT_READ | PROT_WRITE, MAP_SHARED,
+					 s_drmHud.fd, (off_t)map.offset);
+	if (mem == MAP_FAILED) {
+		fprintf(stderr, "[OverlayDRM] mmap failed: %s\n", strerror(errno));
+		drmModeRmFB(s_drmHud.fd, fb);
+		struct drm_mode_destroy_dumb destroy;
+		memset(&destroy, 0, sizeof(destroy));
+		destroy.handle = create.handle;
+		ioctl(s_drmHud.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		return -1;
+	}
+
+	s_drmHud.fb_id = fb;
+	s_drmHud.handle = create.handle;
+	s_drmHud.pitch = create.pitch;
+	s_drmHud.size = create.size;
+	s_drmHud.map = mem;
+	s_drmHud.w = w;
+	s_drmHud.h = h;
+	s_drmHud.cache_key[0] = '\0';
+	return 0;
+}
+
+static void ovl_sdl_drm_logical_to_physical_rect(int x, int y, int w, int h,
+												 int* px, int* py, int* pw, int* ph) {
+	switch (s_overlayRotation) {
+	case 90:
+		*px = s_screenH - y - h;
+		*py = x;
+		*pw = h;
+		*ph = w;
+		break;
+	case 180:
+		*px = s_screenW - x - w;
+		*py = s_screenH - y - h;
+		*pw = w;
+		*ph = h;
+		break;
+	case 270:
+		*px = y;
+		*py = s_screenW - x - w;
+		*pw = h;
+		*ph = w;
+		break;
+	default:
+		*px = x;
+		*py = y;
+		*pw = w;
+		*ph = h;
+		break;
+	}
+	if (*px < 0)
+		*px = 0;
+	if (*py < 0)
+		*py = 0;
+}
+
+static void ovl_sdl_drm_copy_rotated(uint32_t fill_color) {
+	if (!s_hudSurface || !s_drmHud.map)
+		return;
+	memset(s_drmHud.map, 0, (size_t)s_drmHud.size);
+
+	const int src_w = s_hudSurface->w;
+	const int src_h = s_hudSurface->h;
+	const uint8_t* src = (const uint8_t*)s_hudSurface->pixels;
+	uint8_t* dst = (uint8_t*)s_drmHud.map;
+
+	for (int sy = 0; sy < src_h; sy++) {
+		const uint32_t* row = (const uint32_t*)(src + (size_t)sy * (size_t)s_hudSurface->pitch);
+		for (int sx = 0; sx < src_w; sx++) {
+			uint32_t px = row[sx];
+			if (s_drmHud.format == DRM_FORMAT_XRGB8888) {
+				if ((px & 0xFF000000u) == 0)
+					px = fill_color | 0xFF000000u;
+				else
+					px |= 0xFF000000u;
+			}
+
+			int dx = sx;
+			int dy = sy;
+			switch (s_overlayRotation) {
+			case 90:
+				dx = src_h - 1 - sy;
+				dy = sx;
+				break;
+			case 180:
+				dx = src_w - 1 - sx;
+				dy = src_h - 1 - sy;
+				break;
+			case 270:
+				dx = sy;
+				dy = src_w - 1 - sx;
+				break;
+			default:
+				break;
+			}
+			if (dx < 0 || dy < 0 || dx >= s_drmHud.w || dy >= s_drmHud.h)
+				continue;
+			uint32_t* out = (uint32_t*)(dst + (size_t)dy * (size_t)s_drmHud.pitch);
+			out[dx] = px;
+		}
+	}
+}
+
+static int ovl_sdl_draw_hud_plane_box(const char* const* lines, int line_count,
+									  int x, int y, int w, int h, int radius,
+									  int pad_x, int pad_y, int line_gap,
+									  uint32_t panel_color, uint32_t text_color,
+									  int font_id) {
+	if (!lines || line_count <= 0 || w <= 0 || h <= 0)
+		return -1;
+	if (ovl_sdl_drm_init() != 0)
+		return -1;
+	if (ovl_sdl_hud_ensure_surface(w, h) != 0)
+		return -1;
+
+	int px = 0, py = 0, pw = 0, ph = 0;
+	ovl_sdl_drm_logical_to_physical_rect(x, y, w, h, &px, &py, &pw, &ph);
+	if (ovl_sdl_drm_ensure_buffer(pw, ph) != 0)
+		return -1;
+
+	char key[512];
+	ovl_sdl_hud_make_key(key, sizeof(key), lines, line_count,
+						 w, h, radius, pad_x, pad_y, line_gap,
+						 panel_color, text_color, font_id);
+	char placement_key[sizeof(s_drmHud.cache_key)];
+	snprintf(placement_key, sizeof(placement_key), "%s@%d,%d/%dx%d/r%d/f%s",
+			 key, px, py, pw, ph, s_overlayRotation,
+			 ovl_sdl_drm_format_name(s_drmHud.format));
+
+	if (strcmp(placement_key, s_drmHud.cache_key) == 0 && s_drmHud.visible)
+		return 0;
+
+	ovl_sdl_hud_render_surface(lines, line_count, w, h, radius,
+							   pad_x, pad_y, line_gap,
+							   panel_color, text_color, font_id);
+	ovl_sdl_drm_copy_rotated(panel_color);
+
+	if (drmModeSetPlane(s_drmHud.fd, s_drmHud.plane_id, s_drmHud.crtc_id,
+						s_drmHud.fb_id, 0,
+						px, py, (uint32_t)pw, (uint32_t)ph,
+						0, 0, (uint32_t)pw << 16, (uint32_t)ph << 16) != 0) {
+		fprintf(stderr, "[OverlayDRM] SetPlane failed: %s\n", strerror(errno));
+		s_drmHud.ready = 0;
+		s_drmHud.visible = 0;
+		return -1;
+	}
+
+	s_drmHud.visible = 1;
+	s_drmHud.dst_x = px;
+	s_drmHud.dst_y = py;
+	snprintf(s_drmHud.cache_key, sizeof(s_drmHud.cache_key), "%s", placement_key);
+	return 0;
+}
+
+static void ovl_sdl_hide_hud_plane(void) {
+	if (!s_drmHud.ready || s_drmHud.fd < 0 || !s_drmHud.visible)
+		return;
+	drmModeSetPlane(s_drmHud.fd, s_drmHud.plane_id, s_drmHud.crtc_id,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	s_drmHud.visible = 0;
+}
+#else
+static int ovl_sdl_draw_hud_plane_box(const char* const* lines, int line_count,
+									  int x, int y, int w, int h, int radius,
+									  int pad_x, int pad_y, int line_gap,
+									  uint32_t panel_color, uint32_t text_color,
+									  int font_id) {
+	(void)lines;
+	(void)line_count;
+	(void)x;
+	(void)y;
+	(void)w;
+	(void)h;
+	(void)radius;
+	(void)pad_x;
+	(void)pad_y;
+	(void)line_gap;
+	(void)panel_color;
+	(void)text_color;
+	(void)font_id;
+	return -1;
+}
+
+static void ovl_sdl_hide_hud_plane(void) {
+}
+#endif
+
+typedef struct {
+	GLint viewport[4];
+	GLint scissor_box[4];
+	GLboolean blend;
+	GLboolean depth_test;
+	GLboolean cull_face;
+	GLboolean scissor_test;
+	GLint blend_src_rgb;
+	GLint blend_dst_rgb;
+	GLint blend_src_alpha;
+	GLint blend_dst_alpha;
+	GLint program;
+	GLint vao;
+	GLint vbo;
+	GLint tex0;
+	GLint active_tex_unit;
+	GLint unpack_alignment;
+} OvlHudGlState;
+
+static void ovl_sdl_hud_save_gl(OvlHudGlState* st) {
+	glGetIntegerv(GL_VIEWPORT, st->viewport);
+	glGetIntegerv(GL_SCISSOR_BOX, st->scissor_box);
+	st->blend = glIsEnabled(GL_BLEND);
+	st->depth_test = glIsEnabled(GL_DEPTH_TEST);
+	st->cull_face = glIsEnabled(GL_CULL_FACE);
+	st->scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+	glGetIntegerv(GL_BLEND_SRC_RGB, &st->blend_src_rgb);
+	glGetIntegerv(GL_BLEND_DST_RGB, &st->blend_dst_rgb);
+	glGetIntegerv(GL_BLEND_SRC_ALPHA, &st->blend_src_alpha);
+	glGetIntegerv(GL_BLEND_DST_ALPHA, &st->blend_dst_alpha);
+	glGetIntegerv(GL_CURRENT_PROGRAM, &st->program);
+	st->vao = 0;
+	pfn_glBindVertexArray(0);
+	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &st->vbo);
+	glGetIntegerv(GL_ACTIVE_TEXTURE, &st->active_tex_unit);
+	glActiveTexture(GL_TEXTURE0);
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &st->tex0);
+	glGetIntegerv(GL_UNPACK_ALIGNMENT, &st->unpack_alignment);
+}
+
+static void ovl_sdl_hud_restore_gl(const OvlHudGlState* st) {
+	glViewport(st->viewport[0], st->viewport[1], st->viewport[2], st->viewport[3]);
+	glScissor(st->scissor_box[0], st->scissor_box[1],
+			  st->scissor_box[2], st->scissor_box[3]);
+	if (st->blend)
+		glEnable(GL_BLEND);
+	else
+		glDisable(GL_BLEND);
+	if (st->depth_test)
+		glEnable(GL_DEPTH_TEST);
+	else
+		glDisable(GL_DEPTH_TEST);
+	if (st->cull_face)
+		glEnable(GL_CULL_FACE);
+	else
+		glDisable(GL_CULL_FACE);
+	if (st->scissor_test)
+		glEnable(GL_SCISSOR_TEST);
+	else
+		glDisable(GL_SCISSOR_TEST);
+	glBlendFuncSeparate(st->blend_src_rgb, st->blend_dst_rgb,
+						st->blend_src_alpha, st->blend_dst_alpha);
+	glUseProgram(st->program);
+	pfn_glBindVertexArray(st->vao);
+	glBindBuffer(GL_ARRAY_BUFFER, st->vbo);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, st->tex0);
+	glActiveTexture(st->active_tex_unit);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, st->unpack_alignment);
+}
+
+static void ovl_sdl_hud_transform_point(float lx, float ly, float* px, float* py) {
+	switch (s_overlayRotation) {
+	case 90:
+		*px = (float)s_screenH - ly;
+		*py = lx;
+		break;
+	case 180:
+		*px = (float)s_screenW - lx;
+		*py = (float)s_screenH - ly;
+		break;
+	case 270:
+		*px = ly;
+		*py = (float)s_screenW - lx;
+		break;
+	default:
+		*px = lx;
+		*py = ly;
+		break;
+	}
+}
+
+static void ovl_sdl_hud_vertex(float* verts, int index,
+							   float px, float py, float u, float v,
+							   float physical_w, float physical_h) {
+	int off = index * 4;
+	verts[off + 0] = (px / physical_w) * 2.0f - 1.0f;
+	verts[off + 1] = 1.0f - (py / physical_h) * 2.0f;
+	verts[off + 2] = u;
+	verts[off + 3] = v;
+}
+
+static void ovl_sdl_hud_vertices(float* verts, int x, int y, int w, int h) {
+	float physical_w = (float)(s_overlayViewportW > 0 ? s_overlayViewportW : s_screenW);
+	float physical_h = (float)(s_overlayViewportH > 0 ? s_overlayViewportH : s_screenH);
+	float tlx, tly, trx, try_, blx, bly, brx, bry;
+	ovl_sdl_hud_transform_point((float)x, (float)y, &tlx, &tly);
+	ovl_sdl_hud_transform_point((float)(x + w), (float)y, &trx, &try_);
+	ovl_sdl_hud_transform_point((float)x, (float)(y + h), &blx, &bly);
+	ovl_sdl_hud_transform_point((float)(x + w), (float)(y + h), &brx, &bry);
+
+	ovl_sdl_hud_vertex(verts, 0, tlx, tly, 0.0f, 0.0f, physical_w, physical_h);
+	ovl_sdl_hud_vertex(verts, 1, blx, bly, 0.0f, 1.0f, physical_w, physical_h);
+	ovl_sdl_hud_vertex(verts, 2, trx, try_, 1.0f, 0.0f, physical_w, physical_h);
+	ovl_sdl_hud_vertex(verts, 3, trx, try_, 1.0f, 0.0f, physical_w, physical_h);
+	ovl_sdl_hud_vertex(verts, 4, blx, bly, 0.0f, 1.0f, physical_w, physical_h);
+	ovl_sdl_hud_vertex(verts, 5, brx, bry, 1.0f, 1.0f, physical_w, physical_h);
+}
+
+static void ovl_sdl_draw_hud_box(const char* const* lines, int line_count,
+								 int x, int y, int w, int h, int radius,
+								 int pad_x, int pad_y, int line_gap,
+								 uint32_t panel_color, uint32_t text_color,
+								 int font_id) {
+	if (!lines || line_count <= 0 || w <= 0 || h <= 0)
+		return;
+	if (ovl_sdl_hud_ensure_surface(w, h) != 0)
+		return;
+
+	char key[sizeof(s_hudCacheKey)];
+	ovl_sdl_hud_make_key(key, sizeof(key), lines, line_count,
+						 w, h, radius, pad_x, pad_y, line_gap,
+						 panel_color, text_color, font_id);
+	bool needs_upload = strcmp(key, s_hudCacheKey) != 0;
+	if (needs_upload) {
+		ovl_sdl_hud_render_surface(lines, line_count, w, h, radius,
+								   pad_x, pad_y, line_gap,
+								   panel_color, text_color, font_id);
+		SDL_LockSurface(s_hudSurface);
+		convert_argb_to_rgba((const uint8_t*)s_hudSurface->pixels,
+							 s_hudUploadBuffer, w, h, s_hudSurface->pitch);
+		SDL_UnlockSurface(s_hudSurface);
+	}
+
+	OvlHudGlState state;
+	ovl_sdl_hud_save_gl(&state);
+	if (ovl_sdl_hud_ensure_gl() != 0) {
+		ovl_sdl_hud_restore_gl(&state);
+		return;
+	}
+
+	if (needs_upload) {
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, s_hudTexture);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+					 GL_RGBA, GL_UNSIGNED_BYTE, s_hudUploadBuffer);
+		snprintf(s_hudCacheKey, sizeof(s_hudCacheKey), "%s", key);
+	}
+
+	glViewport(0, 0,
+			   s_overlayViewportW > 0 ? s_overlayViewportW : s_screenW,
+			   s_overlayViewportH > 0 ? s_overlayViewportH : s_screenH);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_SCISSOR_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	float verts[24];
+	ovl_sdl_hud_vertices(verts, x, y, w, h);
+
+	glUseProgram(s_texProgram);
+	if (s_texLocTexture >= 0)
+		glUniform1i(s_texLocTexture, 0);
+	pfn_glBindVertexArray(s_hudVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, s_hudVBO);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof(verts), verts);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, s_hudTexture);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+
+	ovl_sdl_hud_restore_gl(&state);
+}
+
+// ---------------------------------------------------------------------------
 // Icon loading/drawing (PNG images for button hints)
 // ---------------------------------------------------------------------------
 
@@ -1453,7 +2322,10 @@ static EmuOvlRenderBackend s_backend = {
 	ovl_sdl_draw_icon,
 	ovl_sdl_icon_width,
 	ovl_sdl_icon_height,
-	ovl_sdl_save_captured_frame};
+	ovl_sdl_save_captured_frame,
+	ovl_sdl_draw_hud_box,
+	ovl_sdl_draw_hud_plane_box,
+	ovl_sdl_hide_hud_plane};
 
 EmuOvlRenderBackend* overlay_sdl_get_backend(void) {
 	return &s_backend;

@@ -170,35 +170,38 @@
         {
           "key": "ShowFPS",
           "label": "Show FPS",
-          "description": "Display frames per second (restart required)",
-          "type": "bool",
-          "default": false,
-          "plugin": "gliden64"
-        },
-        {
-          "key": "ShowFPS",
-          "label": "Show FPS",
-          "description": "Display frames per second (restart required)",
+          "description": "Display frames per second in the Leaf overlay",
           "type": "bool",
           "default": false,
           "plugin": "rice",
           "ini_section": "Video-Rice"
         },
         {
-          "key": "ShowPercent",
-          "label": "Show Speed %",
-          "description": "Display emulation speed percentage (restart required)",
+          "key": "ShowFPS",
+          "label": "Show FPS",
+          "description": "Display frames per second in the Leaf overlay",
           "type": "bool",
           "default": false,
-          "plugin": "gliden64"
+          "plugin": "gliden64",
+          "ini_section": "Video-GLideN64"
         },
         {
           "key": "ShowVIS",
           "label": "Show VI/s",
-          "description": "Display VI interrupts per second (restart required)",
+          "description": "Display vertical interrupt rate in the Leaf overlay",
           "type": "bool",
           "default": false,
-          "plugin": "gliden64"
+          "plugin": "gliden64",
+          "ini_section": "Video-GLideN64"
+        },
+        {
+          "key": "ShowPercent",
+          "label": "Show Speed",
+          "description": "Display emulation speed in the Leaf overlay",
+          "type": "bool",
+          "default": false,
+          "plugin": "gliden64",
+          "ini_section": "Video-GLideN64"
         }
       ]
     },

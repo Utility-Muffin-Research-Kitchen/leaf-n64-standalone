@@ -57,6 +57,35 @@ mkdir -p \
 exec >>"$LOGS_PATH/mupen64plus.log"
 exec 2>&1
 
+PAUSED_JAWAKA_PIDS=""
+
+pause_foreground_jawaka_for_direct_launch() {
+    [ "${MUPEN64PLUS_PAUSE_FOREGROUND_JAWAKA:-1}" != "0" ] || return 0
+    [ -z "${JAWAKA_GAME_SYSTEM:-}" ] || return 0
+
+    pids="$(pgrep -x jawaka-launcher 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+
+    for pid in $pids; do
+        if kill -STOP "$pid" 2>/dev/null; then
+            PAUSED_JAWAKA_PIDS="${PAUSED_JAWAKA_PIDS:+$PAUSED_JAWAKA_PIDS }$pid"
+        fi
+    done
+
+    if [ -n "$PAUSED_JAWAKA_PIDS" ]; then
+        echo "[mupen64plus] paused jawaka-launcher for direct launch: $PAUSED_JAWAKA_PIDS"
+    fi
+}
+
+resume_paused_jawaka() {
+    [ -n "$PAUSED_JAWAKA_PIDS" ] || return 0
+    for pid in $PAUSED_JAWAKA_PIDS; do
+        kill -CONT "$pid" 2>/dev/null || true
+    done
+    echo "[mupen64plus] resumed jawaka-launcher after direct launch: $PAUSED_JAWAKA_PIDS"
+    PAUSED_JAWAKA_PIDS=""
+}
+
 cleanup() {
     if [ -n "${ROM_EXTRACT_DIR:-}" ] && [ -d "$ROM_EXTRACT_DIR" ]; then
         rm -rf "$ROM_EXTRACT_DIR"
@@ -64,8 +93,11 @@ cleanup() {
     if [ -n "${DEVICE_CFG_BACKUP:-}" ] && [ -f "$DEVICE_CFG_BACKUP" ]; then
         mv "$DEVICE_CFG_BACKUP" "$DEVICE_CFG"
     fi
+    resume_paused_jawaka
 }
 trap cleanup EXIT INT TERM HUP QUIT
+
+pause_foreground_jawaka_for_direct_launch
 
 DEVICE_CFG="$CONFIG_DIR/mupen64plus.cfg"
 if [ ! -f "$DEVICE_CFG" ]; then
@@ -237,6 +269,10 @@ set +e
     --set "Video-GLideN64[txPath]=$ROMS_PATH/N64/.hires_texture" \
     --set "Video-GLideN64[txCachePath]=$CACHE_DIR/gliden64-texture-cache" \
     --set "Video-GLideN64[fontName]=$FONT_FILE" \
+    --set "Video-GLideN64[ShowFPS]=False" \
+    --set "Video-GLideN64[ShowVIS]=False" \
+    --set "Video-GLideN64[ShowPercent]=False" \
+    --set "Video-Rice[ShowFPS]=False" \
     --gfx "$LIB_DIR/$GFX_PLUGIN" \
     --audio "$LIB_DIR/mupen64plus-audio-sdl.so" \
     --input "$LIB_DIR/mupen64plus-input-sdl.so" \

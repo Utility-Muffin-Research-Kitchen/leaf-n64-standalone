@@ -355,6 +355,10 @@ env LD_LIBRARY_PATH="$M64P_LD_LIBRARY_PATH" LD_PRELOAD="$M64P_LD_PRELOAD" \
     --set "Video-General[ScreenHeight]=$SCREEN_H" \
     --set "Core[SaveSRAMPath]=$BATTERY_SAVE_DIR/" \
     --set "Core[SaveStatePath]=$STATE_SAVE_DIR/" \
+    --set "Video-GLideN64[ShowFPS]=False" \
+    --set "Video-GLideN64[ShowVIS]=False" \
+    --set "Video-GLideN64[ShowPercent]=False" \
+    --set "Video-Rice[ShowFPS]=False" \
     $ANISO_SET \
     --gfx "$BIN_DIR/$GFX_PLUGIN" \
     --audio mupen64plus-audio-sdl.so \

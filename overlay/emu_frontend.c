@@ -54,9 +54,9 @@ static Uint32 s_prevButtons = 0;
 static int s_prevAxisX = 0;
 static int s_prevAxisY = 0;
 
-static unsigned int s_fpsLastTick = 0;
-static int s_fpsFrameCount = 0;
-static float s_fpsValue = 0.0f;
+static unsigned int s_hudLastTick = 0;
+static int s_hudFrameCount = 0;
+static float s_hudFrameRate = 0.0f;
 
 static bool s_leafSaveQuitPending = false;
 static int s_leafSaveQuitDelayFrames = 0;
@@ -2644,60 +2644,149 @@ void emu_frontend_frame(int w, int h) {
 	// Overlay menu: ensure loaded, then handle menu button press
 	overlay_ensure_init(w, h);
 	if (s_overlayInitialized && check_menu_button()) {
+		if (s_overlay.render && s_overlay.render->hide_hud_plane)
+			s_overlay.render->hide_hud_plane();
 		EmuOvlAction action = run_overlay_loop();
 		handle_overlay_action(action);
 	}
 }
 
-static bool show_fps_enabled(void) {
+static bool hud_option_enabled(const char* key) {
 	if (!s_overlayConfigLoaded)
 		return false;
 	for (int s = 0; s < s_overlayConfig.section_count; s++) {
 		for (int i = 0; i < s_overlayConfig.sections[s].item_count; i++) {
 			EmuOvlItem* item = &s_overlayConfig.sections[s].items[i];
-			if (strcmp(item->key, "ShowFPS") == 0)
+			if (strcmp(item->key, key) == 0)
 				return item->current_value != 0;
 		}
 	}
 	return false;
 }
 
-void emu_frontend_render_hud(int w, int h) {
+static void hud_reset_counters(void) {
+	s_hudLastTick = 0;
+	s_hudFrameCount = 0;
+	s_hudFrameRate = 0.0f;
+}
+
+static bool hud_country_is_pal(unsigned int country) {
+	switch (country & 0xff) {
+	case 0x44: // Germany
+	case 0x46: // France
+	case 0x49: // Italy
+	case 0x50: // Europe
+	case 0x53: // Spain
+	case 0x55: // Australia
+	case 0x58: // PAL region
+	case 0x59: // PAL region
+		return true;
+	default:
+		return false;
+	}
+}
+
+static float hud_target_hz(void) {
+	static bool cached = false;
+	static float target_hz = 60.0f;
+
+	if (cached)
+		return target_hz;
+	cached = true;
+
+	const char* env = getenv("MUPEN64PLUS_HUD_TARGET_HZ");
+	if (env && env[0] != '\0') {
+		char* end = NULL;
+		float parsed = strtof(env, &end);
+		if (end != env && *end == '\0' && parsed >= 1.0f && parsed <= 240.0f) {
+			target_hz = parsed;
+			return target_hz;
+		}
+	}
+
+	if (s_coreAPI.core_cmd) {
+		m64p_rom_header header;
+		memset(&header, 0, sizeof(header));
+		if (s_coreAPI.core_cmd(M64CMD_ROM_GET_HEADER, sizeof(header), &header) == M64ERR_SUCCESS)
+			target_hz = hud_country_is_pal(header.Country_code) ? 50.0f : 60.0f;
+	}
+	return target_hz;
+}
+
+bool emu_frontend_render_hud(int w, int h) {
 	if (!s_initialized || !s_overlayInitialized || !s_overlay.render)
-		return;
-	if (emu_ovl_is_active(&s_overlay))
-		return;
-	if (!show_fps_enabled()) {
-		s_fpsLastTick = 0;
-		s_fpsFrameCount = 0;
-		s_fpsValue = 0.0f;
-		return;
+		return false;
+	const char* plugin = getenv("EMU_VIDEO_PLUGIN");
+	bool use_drm_plane = plugin && strcmp(plugin, "gliden64") == 0;
+	if (emu_ovl_is_active(&s_overlay)) {
+		if (use_drm_plane && s_overlay.render->hide_hud_plane)
+			s_overlay.render->hide_hud_plane();
+		return false;
+	}
+
+	bool show_fps = hud_option_enabled("ShowFPS");
+	bool show_vis = hud_option_enabled("ShowVIS");
+	bool show_percent = hud_option_enabled("ShowPercent");
+	if (!show_fps && !show_vis && !show_percent) {
+		hud_reset_counters();
+		if (use_drm_plane && s_overlay.render->hide_hud_plane)
+			s_overlay.render->hide_hud_plane();
+		return false;
 	}
 
 	unsigned int now = SDL_GetTicks();
-	if (s_fpsLastTick == 0)
-		s_fpsLastTick = now;
-	s_fpsFrameCount++;
-	if (now - s_fpsLastTick >= 1000) {
-		s_fpsValue = (float)s_fpsFrameCount * 1000.0f / (float)(now - s_fpsLastTick);
-		s_fpsFrameCount = 0;
-		s_fpsLastTick = now;
+	if (s_hudLastTick == 0)
+		s_hudLastTick = now;
+	s_hudFrameCount++;
+	if (now - s_hudLastTick >= 1000) {
+		s_hudFrameRate = (float)s_hudFrameCount * 1000.0f / (float)(now - s_hudLastTick);
+		s_hudFrameCount = 0;
+		s_hudLastTick = now;
 	}
-	if (s_fpsValue <= 0.0f)
-		return;
+	if (s_hudFrameRate <= 0.0f) {
+		if (use_drm_plane && s_overlay.render->hide_hud_plane)
+			s_overlay.render->hide_hud_plane();
+		return false;
+	}
 
 	EmuOvlRenderBackend* r = s_overlay.render;
 	int scale = (w <= 1024) ? 3 : 2;
 	int font = EMU_OVL_FONT_TINY;
-	char label[32];
-	snprintf(label, sizeof(label), "%.0f FPS", s_fpsValue);
+	char labels[3][32];
+	const char* label_ptrs[3];
+	int label_count = 0;
+
+	if (show_fps) {
+		snprintf(labels[label_count++], sizeof(labels[0]), "%.0f FPS", s_hudFrameRate);
+	}
+	if (show_vis) {
+		snprintf(labels[label_count++], sizeof(labels[0]), "%.0f VI/s", s_hudFrameRate);
+	}
+	if (show_percent) {
+		float target = hud_target_hz();
+		float speed = target > 0.0f ? (s_hudFrameRate * 100.0f / target) : 0.0f;
+		snprintf(labels[label_count++], sizeof(labels[0]), "%.0f%%", speed);
+	}
+	if (label_count == 0) {
+		if (use_drm_plane && r->hide_hud_plane)
+			r->hide_hud_plane();
+		return false;
+	}
+	for (int i = 0; i < label_count; i++)
+		label_ptrs[i] = labels[i];
 
 	int pad_x = 6 * scale;
 	int pad_y = 3 * scale;
-	int text_w = r->text_width(label, font);
 	int text_h = r->text_height(font);
+	int line_gap = 2 * scale;
+	int text_w = 0;
+	for (int i = 0; i < label_count; i++) {
+		int w_i = r->text_width(labels[i], font);
+		if (w_i > text_w)
+			text_w = w_i;
+	}
 	int box_w = text_w + pad_x * 2;
-	int box_h = text_h + pad_y * 2;
+	int box_h = text_h * label_count + line_gap * (label_count - 1) + pad_y * 2;
 	int margin = 10 * scale;
 	int x = w - margin - box_w;
 	int y = margin;
@@ -2705,14 +2794,39 @@ void emu_frontend_render_hud(int w, int h) {
 	if (radius < 0)
 		radius = 0;
 
+	if (r->draw_hud_box) {
+		if (use_drm_plane && r->draw_hud_plane_box) {
+			r->draw_hud_plane_box(label_ptrs, label_count, x, y, box_w, box_h, radius,
+								  pad_x, pad_y, line_gap,
+								  s_overlay.theme.panel, s_overlay.theme.text, font);
+			return false;
+		}
+		r->draw_hud_box(label_ptrs, label_count, x, y, box_w, box_h, radius,
+						pad_x, pad_y, line_gap,
+						s_overlay.theme.panel, s_overlay.theme.text, font);
+		return true;
+	}
+
+	if (use_drm_plane && r->draw_hud_plane_box) {
+		r->draw_hud_plane_box(label_ptrs, label_count, x, y, box_w, box_h, radius,
+							  pad_x, pad_y, line_gap,
+							  s_overlay.theme.panel, s_overlay.theme.text, font);
+		return false;
+	}
+
 	r->begin_frame();
 	if (r->draw_rounded_rect)
 		r->draw_rounded_rect(x, y, box_w, box_h, radius, s_overlay.theme.panel);
 	else
 		r->draw_rect(x, y, box_w, box_h, s_overlay.theme.panel);
-	r->draw_text(label, x + pad_x, y + (box_h - text_h) / 2,
-				 s_overlay.theme.text, font);
+	int text_y = y + pad_y;
+	for (int i = 0; i < label_count; i++) {
+		r->draw_text(labels[i], x + pad_x, text_y,
+					 s_overlay.theme.text, font);
+		text_y += text_h + line_gap;
+	}
 	r->end_frame();
+	return true;
 }
 
 void emu_frontend_cleanup(void) {

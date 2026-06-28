@@ -19,6 +19,8 @@ export PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR:-$SYSROOT/usr/lib/pkgconfig:$SYSRO
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$PKG_CONFIG_LIBDIR}"
 export SDL_CFLAGS="${SDL_CFLAGS:-$(pkg-config --cflags sdl2)}"
 export SDL_LDLIBS="${SDL_LDLIBS:-$(pkg-config --libs sdl2)}"
+export LIBDRM_CFLAGS="${LIBDRM_CFLAGS:-$(pkg-config --cflags libdrm) -DEMU_OVL_ENABLE_DRM_HUD}"
+export LIBDRM_LDLIBS="${LIBDRM_LDLIBS:-$(pkg-config --libs libdrm)}"
 
 OPTFLAGS="${MLP1_OPTFLAGS:--O3 -mcpu=cortex-a55 -ffunction-sections -fdata-sections}"
 OVERLAY_DIR="$SRC/../overlay"
@@ -62,7 +64,10 @@ build_make "$SRC/mupen64plus-audio-sdl/projects/unix" "${plugin_flags[@]}"
 build_make "$SRC/mupen64plus-input-sdl/projects/unix" "${plugin_flags[@]}"
 build_make "$SRC/mupen64plus-rsp-hle/projects/unix" "${plugin_flags[@]}"
 build_make "$SRC/mupen64plus-video-rice/projects/unix" "${plugin_flags[@]}" USE_GLES=1 \
-    OVERLAY_DIR="$OVERLAY_DIR" CPPFLAGS="-I$ROOT_DIR/include -I$OVERLAY_DIR -I$OVERLAY_DIR/cjson"
+    OVERLAY_DIR="$OVERLAY_DIR" \
+    LIBDRM_CFLAGS="$LIBDRM_CFLAGS" \
+    LIBDRM_LDLIBS="$LIBDRM_LDLIBS" \
+    CPPFLAGS="-I$ROOT_DIR/include -I$OVERLAY_DIR -I$OVERLAY_DIR/cjson"
 
 make -C "$ROOT_DIR/tools/ini" clean all CROSS_COMPILE="$CROSS_COMPILE"
 
@@ -88,6 +93,8 @@ set(ZLIB_LIBRARY $SYSROOT/usr/lib/libz.so)
 set(ZLIB_INCLUDE_DIR $SYSROOT/usr/include)
 set(FREETYPE_INCLUDE_DIRS $SYSROOT/usr/include/freetype2)
 set(FREETYPE_LIBRARIES $SYSROOT/usr/lib/libfreetype.so)
+set(LIBDRM_INCLUDE_DIRS $SYSROOT/usr/include $SYSROOT/usr/include/libdrm)
+set(LIBDRM_LIBRARIES $SYSROOT/usr/lib/libdrm.so)
 EOF
     cmake -S "$SRC/GLideN64/src" -B "$SRC/GLideN64/src/build-mlp1" \
         -DCMAKE_TOOLCHAIN_FILE="$SRC/GLideN64/src/toolchain-aarch64.cmake" \
@@ -139,6 +146,7 @@ copy_runtime_lib libstdc++.so.6
 copy_runtime_lib libgcc_s.so.1
 copy_runtime_lib libfreetype.so.6
 copy_runtime_lib libharfbuzz.so.0
+copy_runtime_lib libdrm.so.2
 
 cp -f "$ROOT_DIR/config/shared/default.cfg" "$BUILD_DIR/defaults/default.cfg"
 cp -f "$ROOT_DIR/config/shared/overlay_settings.json" "$BUILD_DIR/defaults/overlay_settings.json"
