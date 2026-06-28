@@ -104,12 +104,15 @@ if [ ! -f "$DEVICE_CFG" ]; then
     cp "$DEFAULTS_DIR/default.cfg" "$DEVICE_CFG"
 fi
 
-INPUT_PROFILE_VERSION="mlp1-loong-sdl-buttons-20260628"
+INPUT_PROFILE_VERSION="mlp1-loong-sdl-calibrated-20260628"
 INPUT_PROFILE_STAMP="$CONFIG_DIR/.input-profile-$INPUT_PROFILE_VERSION"
 if [ "$PLATFORM" = "mlp1" ] && [ ! -f "$INPUT_PROFILE_STAMP" ]; then
     INPUT_PROFILE_CFG="$CONFIG_DIR/mlp1-input-profile.ini"
     cat >"$INPUT_PROFILE_CFG" <<'EOF'
 [Input-SDL-Control1]
+mode = 0
+device = 0
+name = "Loong Gamepad"
 DPad R = "hat(0 Right)"
 DPad L = "hat(0 Left)"
 DPad D = "hat(0 Down)"
@@ -126,6 +129,8 @@ R Trig = "button(5)"
 L Trig = "button(4)"
 X Axis = "axis(0-,0+)"
 Y Axis = "axis(1-,1+)"
+AnalogDeadzone = "4096,4096"
+AnalogPeak = "32767,32767"
 Select = "button(8)"
 Hotkey = "button(10)"
 EOF
@@ -222,6 +227,50 @@ export XDG_CACHE_HOME="$CACHE_DIR"
 export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export SDL_VIDEODRIVER="${MUPEN64PLUS_SDL_VIDEODRIVER:-kmsdrm}"
 export SDL_KMSDRM_REQUIRE_DRM_MASTER="${SDL_KMSDRM_REQUIRE_DRM_MASTER:-0}"
+
+resolve_mlp1_virtual_gamepad() {
+    awk '
+        /^I:/ {
+            name = 0
+            virtual = 0
+            event = ""
+        }
+        /^N: Name="Loong Gamepad"/ {
+            name = 1
+        }
+        /^S: Sysfs=\/devices\/virtual\/input\// {
+            virtual = 1
+        }
+        /^H: Handlers=/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^event[0-9]+$/) {
+                    event = $i
+                }
+            }
+        }
+        name && virtual && event != "" {
+            print "/dev/input/" event
+            exit
+        }
+    ' /proc/bus/input/devices 2>/dev/null
+}
+
+if [ "$PLATFORM" = "mlp1" ] && [ -z "${SDL_JOYSTICK_DEVICE:-}" ]; then
+    if [ -n "${JAWAKA_RETROARCH_VIRTUAL_EVENT:-}" ] &&
+       [ -e "$JAWAKA_RETROARCH_VIRTUAL_EVENT" ]; then
+        MLP1_VIRTUAL_GAMEPAD="$JAWAKA_RETROARCH_VIRTUAL_EVENT"
+    else
+        MLP1_VIRTUAL_GAMEPAD="$(resolve_mlp1_virtual_gamepad || true)"
+    fi
+
+    if [ -n "$MLP1_VIRTUAL_GAMEPAD" ] && [ -e "$MLP1_VIRTUAL_GAMEPAD" ]; then
+        export SDL_JOYSTICK_DEVICE="$MLP1_VIRTUAL_GAMEPAD"
+        echo "[mupen64plus] using calibrated Jawaka virtual gamepad: $SDL_JOYSTICK_DEVICE"
+    else
+        echo "[mupen64plus] calibrated Jawaka virtual gamepad not found; using SDL default joystick scan"
+    fi
+fi
+
 export DISPLAY_ROTATION="${MUPEN64PLUS_DISPLAY_ROTATION:-${DISPLAY_ROTATION:-270}}"
 if [ "$EMU_VIDEO_PLUGIN" = "gliden64" ]; then
     export DISPLAY_ROTATION="${MUPEN64PLUS_DISPLAY_ROTATION:-0}"
