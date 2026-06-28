@@ -1526,6 +1526,29 @@ static bool process_pending_leaf_save_quit(void) {
 // ---------------------------------------------------------------------------
 
 static void trigger_game_switcher(void) {
+	// Under Jawaka (the game was launched by jawakad, which exports
+	// JAWAKA_GAME_SYSTEM), request the launcher's switcher carousel: drop an
+	// identity-bearing marker that jawakad validates on our exit, then take the
+	// normal slot-99 save+settle+quit path. jawakad reopens the launcher straight
+	// into the switcher, seeded on this game.
+	const char* jawaka_system = getenv("JAWAKA_GAME_SYSTEM");
+	if (jawaka_system && jawaka_system[0]) {
+		const char* runtime_dir = getenv("UMRK_RUNTIME_PATH");
+		if (!runtime_dir || !runtime_dir[0])
+			runtime_dir = getenv("JAWAKA_RUNTIME_DIR");
+		if (runtime_dir && runtime_dir[0]) {
+			const char* rom_abs = getenv("JAWAKA_GAME_ROM_ABS");
+			char path[512];
+			snprintf(path, sizeof(path), "%s/standalone-switcher-request", runtime_dir);
+			FILE* f = fopen(path, "w");
+			if (f) {
+				fprintf(f, "%s\n%s\n", jawaka_system, rom_abs ? rom_abs : "");
+				fclose(f);
+			}
+		}
+		queue_leaf_resume_and_quit();
+		return;
+	}
 	if (nextui_markers_disabled()) {
 		queue_leaf_resume_and_quit();
 		return;
