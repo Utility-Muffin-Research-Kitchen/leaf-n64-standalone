@@ -1,13 +1,12 @@
-# N64 Standalone for Leaf / MLP1
+# N64 Standalone for Leaf / Miniloong Pocket 1
 
-This UMRK fork adapts `josegonzalez/minui-n64-pak` into a Leaf standalone
-emulator payload for Miniloong Pocket 1. It is staged by Leaf under:
+Standalone Mupen64Plus for Leaf on the Miniloong Pocket 1. Leaf stages it under:
 
 ```text
 .system/leaf/platforms/mlp1/emulators/mupen64plus/
 ```
 
-Primary Leaf commands:
+Primary commands:
 
 ```sh
 make build-mlp1
@@ -21,130 +20,81 @@ Mupen64Plus binaries/plugins, defaults, bundled runtime libraries, and
 canonical `Roms/N64` library, stores battery saves under `Saves/N64`, and stores
 standalone state/config under the shared Leaf runtime-path contract.
 
-MLP1 controls use the Loong Gamepad SDL joystick layout captured by Catastrophe:
-Menu opens the standalone overlay on button 10, Menu + Select performs Leaf's
-standalone game-switcher handoff, Select is button 8, Start is button 9, L/R
-are buttons 4/5, L2/R2 are buttons 6/7, the d-pad is SDL hat 0, and C-buttons
-are available with R2 + ABXY. The overlay opens SDL joystick index 0 by default,
-logs the selected joystick in `mupen64plus.log`, and can be pointed at another
-SDL index for QA with `EMU_OVERLAY_JOYSTICK_INDEX`.
+## Controls
 
-The original upstream README follows for historical context.
+Miniloong Pocket 1 controls use the Loong Gamepad SDL joystick layout captured
+by Catastrophe:
 
-# N64 for TrimUI
-
-A MinUI Emu Pak for N64, wrapping the standalone `mupen64plus` N64 emulator (version 2.6.0).
-
-![N64 for TrimUI](n64.png)
-
-## Requirements
-
-This pak is designed and tested on the following MinUI Platforms and devices:
-
-- `tg5040`: TrimUI Brick (formerly `tg3040`) and TrimUI Smart Pro
-- `tg5050`: TrimUI Smart Pro S
-
-Use the correct platform for your device.
-
-## Installation
-
-1. Mount your MinUI SD card.
-2. Download the latest release from Github. It will be named `N64.pak.zip`.
-3. Copy the zip file to `/Emus/$PLATFORM/N64.pak.zip`.
-4. Extract the zip in place, then delete the zip file.
-5. Confirm that there is a `/Emus/$PLATFORM/N64.pak/launch.sh` file on your SD card.
-6. Create a folder at `/Roms/Nintendo 64 (N64)` and place your roms in this directory.
-7. Unmount your SD Card and insert it into your MinUI device.
-
-## Usage
-
-Browse to `Nintendo 64` and press `A` to play a game.
-
-The following filetypes are supported:
-
-- Native: `.n64`, `.v64`, `.z64`
-- Extracted: `.zip`, `.7z`
-
-Extraction happens prior to game loading using 7-zip and can cause delays in loading the game. To avoid this, extract the game on your SD card instead.
-
-While playing:
-
-### Quick menu
-
-Press the **Menu** button to open the in-game quick menu.
-
-| Action | Button |
-|--------|--------|
-| Open / close menu | Menu |
-| Navigate | D-pad |
-| Confirm | A |
-| Back | B |
-
-The quick menu has five options:
-
-- **Continue** — close the menu and resume playing
-- **Save** — save your progress to a slot (d-pad left/right to pick a slot, A to save)
-- **Load** — load a previous save (same controls as Save)
-- **Options** — video, audio, performance, input, and shortcut settings
-- **Quit** — exit the game
-
-### Save slots
-
-There are 8 save slots per game. When Save or Load is highlighted, use **d-pad left/right** to cycle through slots — a preview screenshot appears on the right. Press **A** to save or load immediately.
-
-### Power button
-
-| Press | Action |
-|-------|--------|
-| Short press (< 1 second) | Sleep — screen off, audio muted, game state auto-saved |
-| Long press (≥ 1 second) | Power off — exits the game cleanly |
-
-After 2 minutes of sleep the device suspends to RAM to save battery. Press the power button to wake.
-
-### Options
-
-Inside Options you can adjust settings like video plugin, CPU speed, frame skip, and more. Changes take effect immediately where possible. To keep your changes across game launches, scroll to **Save Changes** at the bottom of the Options list:
-
-- **Save for Console** — saves settings for all games
-- **Save for Game** — saves settings for the current game only
-- **Restore Defaults** — resets to default settings
-
-The menu shows whether you're using default, console, or game-specific settings.
-
-### Video plugins
-
-Two video plugins are included:
-
-- **Rice** (default) — faster, better performance on the Brick's hardware
-- **GLideN64** — more accurate rendering, heavier on the GPU
-
-Change the plugin in Options → Core → Video Plugin (requires restarting the game).
-
-### Controls (Brick)
-
-The Brick has no analog sticks, so the d-pad doubles as the N64 joystick by default. For games that use the N64 d-pad (like Kirby 64 or puzzle games), the emulator automatically switches to d-pad mode. You can also change this manually in Options → Input → Input Mode.
-
-C-buttons are accessed by holding **R2** and pressing a face button:
-
-| Combo | N64 C-button |
-|-------|-------------|
+| Input | N64 action |
+|---|---|
+| D-pad | N64 d-pad |
+| Left stick | N64 analog stick |
+| A | A Button |
+| B | B Button |
+| Start | Start |
+| L1 | L Trigger |
+| R1 | R Trigger |
+| L2 | Z Trigger |
 | R2 + X | C-Up |
 | R2 + B | C-Down |
 | R2 + Y | C-Left |
 | R2 + A | C-Right |
+| Menu | Open/close quick menu |
+| Menu + Select | Leaf game switcher |
 
-### Controls (Smart Pro / Smart Pro S)
+Raw button indices are `B=0`, `A=1`, `X=2`, `Y=3`, `L1=4`, `R1=5`, `L2=6`,
+`R2=7`, `Select=8`, `Start=9`, and `Menu=10`. L2/R2 are buttons, not trigger
+axes; the d-pad is SDL hat 0; the analog stick is axes 0/1.
 
-Both analog sticks and the d-pad work natively — left stick controls the N64 analog, right stick controls C-buttons, and the d-pad maps to the N64 d-pad. No special configuration needed.
+## Quick Menu
 
-### Shortcuts
+Press **Menu** while playing to open the quick menu.
 
-You can assign buttons to common actions like fast forward, quick save/load, rewind, and screenshots. Go to Options → Shortcuts and set any face or shoulder button for each action.
+| Action | Button |
+|---|---|
+| Open / close menu | Menu |
+| Navigate | D-pad or left stick |
+| Confirm | A |
+| Back / resume | B |
+| Page left | L1 |
+| Page right | R1 |
 
-## Technical documentation
+The quick menu provides Resume, Save State, Load State, Options, and Quit. On
+the Quit row, Left/Right toggles between `Save & Quit` and plain `Quit`.
 
-For build instructions, patch details, data paths, and other developer-facing information, see [TECHNICAL.md](TECHNICAL.md).
+## Save Data
 
-### Debug Logging
+- Battery saves: `Saves/N64`
+- Manual save states: `States/Mupen64Plus Standalone`
+- Leaf resume state: reserved slot `99`
+- Emulator config/cache: `.userdata/mlp1/mupen64plus`
 
-Logs will be written to the`$SDCARD_PATH/.userdata/$PLATFORM/logs/` folder.
+Generated `.buttons` files are runtime caches. Persistent user remaps live in
+the console or per-game `.cfg` files.
+
+## Options
+
+The embedded options menu can save settings globally or per game. Video plugin
+changes require restarting the game; most input and shortcut changes apply
+during the current session.
+
+Two video plugins are packaged:
+
+- **Rice**: default, faster first-pass option.
+- **GLideN64**: more accurate, heavier on the GPU.
+
+## Logs
+
+Runtime logs are written to:
+
+```text
+$SDCARD_PATH/.userdata/$PLATFORM/logs/mupen64plus.log
+```
+
+The overlay logs the selected SDL joystick and should report the Loong Gamepad
+as joystick 0 with 14 buttons, 2 axes, and 1 hat on Miniloong Pocket 1.
+
+## Technical Documentation
+
+For build internals, patch details, and data paths, see
+[TECHNICAL.md](TECHNICAL.md).

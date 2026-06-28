@@ -119,6 +119,14 @@ dist/N64.pak/
 
 ### Physical controls by device
 
+Leaf/MLP1 uses the Loong Gamepad raw SDL joystick map captured by Catastrophe:
+`B=0`, `A=1`, `X=2`, `Y=3`, `L1=4`, `R1=5`, `L2=6`, `R2=7`,
+`Select=8`, `Start=9`, `Menu=10`, d-pad `hat(0)`, and analog stick axes
+`0/1`. L2/R2 are SDL buttons on MLP1, not trigger axes. The MLP1 default
+profile maps L2 to the N64 Z trigger, keeps direct C-button rows blank, and
+uses R2 + ABXY as the C-button fallback. Generated `.buttons` files are runtime
+caches; persistent user remaps live in the console or per-game `.cfg` files.
+
 | Control | Brick | Smart Pro | Smart Pro S |
 |---------|:-----:|:---------:|:-----------:|
 | D-pad | Yes | Yes | Yes |
@@ -169,6 +177,10 @@ All other games default to **Joystick**. Change it live via the overlay menu's *
 ### Brick-specific C-button remap
 
 The Brick has no right analog stick either, so C-buttons are accessed via **R2 + ABXY**: hold R2 and press a face button to send a C-button based on the physical position (A=right, B=bottom, X=top, Y=left). Without R2 held, X and Y still map to C-Left and C-Down as normal. This remap is also gated on `$DEVICE=brick`; Smart Pro / Smart Pro S use their real right analog stick for C-buttons via the `axis(3±,24000)` mappings in `default.cfg`.
+
+Leaf/MLP1 explicitly enables the same fallback with `MUPEN64PLUS_C_BUTTON_MOD=1`
+and `MUPEN64PLUS_C_BUTTON_MOD_BUTTON=7`, because Loong Gamepad exposes R2 as a
+button.
 
 ### Overlay menu
 
