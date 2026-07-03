@@ -8,6 +8,7 @@ MLP1_SRC="${MLP1_SRC:-$ROOT_DIR/workdir/mlp1/src}"
 MLP1_BUILD_DIR="${MLP1_BUILD_DIR:-$ROOT_DIR/output/mlp1/build}"
 BUILD_JOBS="${BUILD_JOBS:-}"
 MLP1_BUILD_GLIDEN64="${MLP1_BUILD_GLIDEN64:-1}"
+MLP1_BUILD_PROFILE="${MLP1_BUILD_PROFILE:-perf}"
 
 if ! "$DOCKER" image inspect "$TOOLCHAIN_IMAGE" >/dev/null 2>&1; then
     echo "missing Docker image: $TOOLCHAIN_IMAGE" >&2
@@ -26,6 +27,7 @@ make -C "$ROOT_DIR" clone patch SRC="$MLP1_SRC"
     -e MLP1_BUILD_DIR=/build/output/mlp1/build \
     -e BUILD_JOBS="$BUILD_JOBS" \
     -e MLP1_BUILD_GLIDEN64="$MLP1_BUILD_GLIDEN64" \
+    -e MLP1_BUILD_PROFILE="$MLP1_BUILD_PROFILE" \
     "$TOOLCHAIN_IMAGE" \
     bash /build/scripts/build-mlp1-in-docker.sh
 

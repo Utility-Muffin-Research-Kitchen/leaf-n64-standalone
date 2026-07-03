@@ -22,7 +22,13 @@ export SDL_LDLIBS="${SDL_LDLIBS:-$(pkg-config --libs sdl2)}"
 export LIBDRM_CFLAGS="${LIBDRM_CFLAGS:-$(pkg-config --cflags libdrm) -DEMU_OVL_ENABLE_DRM_HUD}"
 export LIBDRM_LDLIBS="${LIBDRM_LDLIBS:-$(pkg-config --libs libdrm)}"
 
-OPTFLAGS="${MLP1_OPTFLAGS:--O3 -mcpu=cortex-a55 -ffunction-sections -fdata-sections}"
+MLP1_BUILD_PROFILE="${MLP1_BUILD_PROFILE:-perf}"
+if [ -f /opt/mlp1-toolchain/umrk/mlp1-build-flags.env ]; then
+    . /opt/mlp1-toolchain/umrk/mlp1-build-flags.env
+else
+    UMRK_MLP1_PROFILE_CFLAGS="-O3 -mcpu=cortex-a55 -mtune=cortex-a55 -ffunction-sections -fdata-sections -DNDEBUG"
+fi
+OPTFLAGS="${MLP1_OPTFLAGS:-$UMRK_MLP1_PROFILE_CFLAGS}"
 OVERLAY_DIR="$SRC/../overlay"
 
 core_flags=(
