@@ -139,6 +139,24 @@ EOF
     fi
 fi
 
+# The expansion slot moved from the Controller Pak to the Rumble Pak when Leaf
+# gained haptics, and a config written before then still says Mem pak. Only a
+# config that predates the change is touched, and only once: after this the
+# Options menu owns the setting, so anyone who switches back stays switched.
+EXPANSION_PAK_VERSION="mlp1-rumble-pak-20260726"
+EXPANSION_PAK_STAMP="$CONFIG_DIR/.expansion-pak-$EXPANSION_PAK_VERSION"
+if [ ! -f "$EXPANSION_PAK_STAMP" ]; then
+    EXPANSION_PAK_CFG="$CONFIG_DIR/mlp1-expansion-pak.ini"
+    cat >"$EXPANSION_PAK_CFG" <<'EOF'
+[Input-SDL-Control1]
+plugin = 5
+EOF
+    if "$INI" merge "$DEVICE_CFG" "$EXPANSION_PAK_CFG"; then
+        : >"$EXPANSION_PAK_STAMP"
+    fi
+    rm -f "$EXPANSION_PAK_CFG"
+fi
+
 PER_GAME_CFG="$PER_GAME_DIR/$ROM_BASE.cfg"
 if [ -f "$PER_GAME_CFG" ]; then
     DEVICE_CFG_BACKUP="$DEVICE_CFG.console-backup"
