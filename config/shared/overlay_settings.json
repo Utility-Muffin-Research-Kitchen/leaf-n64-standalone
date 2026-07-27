@@ -161,6 +161,22 @@
           ],
           "default": 0,
           "ini_section": "Leaf-Input"
+        },
+        {
+          "key": "plugin",
+          "label": "Expansion Pak",
+          "description": "One slot, as on the N64: rumble or a Controller Pak (restart required)",
+          "type": "cycle",
+          "values": [
+            5,
+            2
+          ],
+          "labels": [
+            "Rumble Pak",
+            "Controller Pak"
+          ],
+          "default": 5,
+          "ini_section": "Input-SDL-Control1"
         }
       ]
     },
