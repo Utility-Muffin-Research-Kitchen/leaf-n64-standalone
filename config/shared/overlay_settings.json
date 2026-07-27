@@ -175,7 +175,7 @@
             "Rumble Pak",
             "Controller Pak"
           ],
-          "default": 0,
+          "default": 5,
           "ini_section": "Input-SDL-Control1"
         }
       ]
