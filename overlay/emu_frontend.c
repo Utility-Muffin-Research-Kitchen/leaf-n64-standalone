@@ -50,6 +50,8 @@ static int s_select_button = -1;
 static int s_start_button = -1;
 static int s_l1_button = -1;
 static int s_r1_button = -1;
+static int s_a_button = -1;
+static int s_b_button = -1;
 
 // ---------------------------------------------------------------------------
 // Overlay state
@@ -111,6 +113,23 @@ static int select_button_index(void) {
 	if (env >= 0)
 		return env;
 	return s_select_button >= 0 ? s_select_button : 6;
+}
+
+// Confirm. Defaults to raw 1: the built-in pad's A sits there because its face
+// buttons are in the Nintendo positions while it reports Xbox-style indices.
+static int a_button_index(void) {
+	int env = env_int_range("EMU_A_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_a_button >= 0 ? s_a_button : 1;
+}
+
+// Back. Defaults to raw 0, for the same reason.
+static int b_button_index(void) {
+	int env = env_int_range("EMU_B_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_b_button >= 0 ? s_b_button : 0;
 }
 
 static int start_button_index(void) {
@@ -237,6 +256,12 @@ static void resolve_named_buttons(int device_index, const char* name) {
 		{ SDL_CONTROLLER_BUTTON_START, &s_start_button },
 		{ SDL_CONTROLLER_BUTTON_LEFTSHOULDER, &s_l1_button },
 		{ SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, &s_r1_button },
+		// Confirm and back. The built-in pad sits at raw 1 and 0 because its
+		// face buttons are in the Nintendo positions while it reports
+		// Xbox-style indices; a wireless pad is the other way round, which
+		// swaps confirm and back in the menu.
+		{ SDL_CONTROLLER_BUTTON_A, &s_a_button },
+		{ SDL_CONTROLLER_BUTTON_B, &s_b_button },
 	};
 	for (size_t i = 0; i < sizeof(wanted) / sizeof(wanted[0]); i++) {
 		SDL_GameControllerButtonBind bind =
@@ -249,13 +274,15 @@ static void resolve_named_buttons(int device_index, const char* name) {
 	SDL_GameControllerClose(gc);
 
 	fprintf(stderr,
-	        "[Overlay] %s: menu=%d select=%d start=%d l1=%d r1=%d\n",
+	        "[Overlay] %s: menu=%d select=%d start=%d l1=%d r1=%d a=%d b=%d\n",
 	        name ? name : "(unknown)",
 	        s_menu_button,
 	        s_select_button,
 	        s_start_button,
 	        s_l1_button,
-	        s_r1_button);
+	        s_r1_button,
+	        s_a_button,
+	        s_b_button);
 }
 
 static void ensure_overlay_joystick_open(void) {
@@ -2261,7 +2288,8 @@ static EmuOvlInput poll_overlay_input(void) {
 	s_prevAxisY = axisY;
 
 	// Buttons — edge detect: only trigger on newly-pressed buttons.
-	int btnMap[] = {0, 1, l1_button_index(), r1_button_index(), menu_button_index()};
+	int btnMap[] = {b_button_index(), a_button_index(), l1_button_index(),
+	                r1_button_index(), menu_button_index()};
 	Uint32 curButtons = 0;
 	for (int i = 0; i < 5; i++) {
 		if (joystick_button_held(btnMap[i]))
@@ -2270,8 +2298,8 @@ static EmuOvlInput poll_overlay_input(void) {
 	Uint32 btnPressed = curButtons & ~s_prevButtons;
 	s_prevButtons = curButtons;
 
-	if (btnPressed & button_mask(0)) input.b = true;
-	if (btnPressed & button_mask(1)) input.a = true;
+	if (btnPressed & button_mask(b_button_index())) input.b = true;
+	if (btnPressed & button_mask(a_button_index())) input.a = true;
 	if (btnPressed & button_mask(l1_button_index())) input.l1 = true;
 	if (btnPressed & button_mask(r1_button_index())) input.r1 = true;
 	if (btnPressed & button_mask(menu_button_index())) input.menu = true;
@@ -2308,7 +2336,8 @@ static EmuOvlAction run_overlay_loop(void) {
 	s_prevAxisX = SDL_JoystickGetAxis(s_joy, 0);
 	s_prevAxisY = SDL_JoystickGetAxis(s_joy, 1);
 	s_prevButtons = 0;
-	int menu_btns[] = {0, 1, l1_button_index(), r1_button_index(), menu_button_index()};
+	int menu_btns[] = {b_button_index(), a_button_index(), l1_button_index(),
+	                   r1_button_index(), menu_button_index()};
 	for (int i = 0; i < 5; i++) {
 		if (joystick_button_held(menu_btns[i]))
 			s_prevButtons |= button_mask(menu_btns[i]);
