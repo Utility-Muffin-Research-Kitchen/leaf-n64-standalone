@@ -158,6 +158,9 @@ cp -f "$ROOT_DIR/config/shared/default.cfg" "$BUILD_DIR/defaults/default.cfg"
 cp -f "$ROOT_DIR/config/shared/overlay_settings.json" "$BUILD_DIR/defaults/overlay_settings.json"
 copy_file "$SRC/mupen64plus-core/data/mupen64plus.ini" "$BUILD_DIR/defaults/mupen64plus.ini"
 copy_file "$SRC/mupen64plus-input-sdl/data/InputAutoCfg.ini" "$BUILD_DIR/defaults/InputAutoCfg.ini"
+# Full-auto controller sections map each pad by SDL name, and upstream has no
+# entry for Jawaka's calibrated virtual Loong.
+cat "$ROOT_DIR/config/shared/loong-autocfg.ini" >> "$BUILD_DIR/defaults/InputAutoCfg.ini"
 copy_file "$SRC/mupen64plus-core/data/mupencheat.txt" "$BUILD_DIR/defaults/mupencheat.txt"
 copy_file "$SRC/mupen64plus-video-rice/data/RiceVideoLinux.ini" "$BUILD_DIR/defaults/RiceVideoLinux.ini"
 

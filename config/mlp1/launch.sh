@@ -165,6 +165,71 @@ if [ -f "$PER_GAME_CFG" ]; then
     "$INI" merge "$DEVICE_CFG" "$PER_GAME_CFG" || true
 fi
 
+# Jawaka freezes a controller roster for each launch and publishes it in
+# SDL_JOYSTICK_DEVICE in player order, backed by a private /dev/input holding
+# exactly those devices, so SDL joystick N is roster slot N.
+#
+# The shipped sections bound port 1 manually to SDL device 0 with the built-in
+# pad's mapping. That is only correct when nothing is paired: connect a
+# wireless controller and device 0 becomes the wireless pad, which then plays
+# port 1 through the Loong's button layout. Full-auto sections let the input
+# plugin map each pad from InputAutoCfg.ini by its SDL name instead -- that is
+# what the packaged Loong profile is for.
+CONTROLLER_MODE_VERSION="mlp1-roster-autoconfig-20260813"
+CONTROLLER_MODE_STAMP="$CONFIG_DIR/.controller-mode-$CONTROLLER_MODE_VERSION"
+if [ ! -f "$CONTROLLER_MODE_STAMP" ]; then
+    CONTROLLER_MODE_CFG="$CONFIG_DIR/mlp1-controller-mode.ini"
+    : >"$CONTROLLER_MODE_CFG"
+    for port in 1 2 3 4; do
+        # Only move a section still sitting on the shipped fully-manual value.
+        # A port someone has already reconfigured keeps whatever they chose.
+        current_mode="$("$INI" get "$DEVICE_CFG" "Input-SDL-Control$port" "mode" 2>/dev/null || true)"
+        case "$current_mode" in
+            0|0.0|0.000000)
+                printf '[Input-SDL-Control%s]\nmode = 2\n' "$port" \
+                    >>"$CONTROLLER_MODE_CFG"
+                ;;
+        esac
+    done
+    if [ -s "$CONTROLLER_MODE_CFG" ]; then
+        "$INI" merge "$DEVICE_CFG" "$CONTROLLER_MODE_CFG" || true
+    fi
+    rm -f "$CONTROLLER_MODE_CFG"
+    : >"$CONTROLLER_MODE_STAMP"
+fi
+
+# How many N64 ports are occupied describes what is plugged in right now, not a
+# preference, so it is rewritten every launch rather than migrated once. Ports
+# past the roster are emptied so an absent player cannot acquire one.
+roster_count=""
+if [ -n "${SDL_JOYSTICK_DEVICE:-}" ]; then
+    roster_count="$(printf '%s' "$SDL_JOYSTICK_DEVICE" | awk -F: '{ print NF }')"
+elif [ -n "${JAWAKA_INPUT_ROSTER_COUNT:-}" ]; then
+    roster_count="$JAWAKA_INPUT_ROSTER_COUNT"
+fi
+case "$roster_count" in
+    ''|*[!0-9]*) roster_count="" ;;
+esac
+if [ -n "$roster_count" ] && [ "$roster_count" -ge 1 ]; then
+    if [ "$roster_count" -gt 4 ]; then
+        roster_count=4
+    fi
+    ROSTER_PORTS_CFG="$CONFIG_DIR/mlp1-roster-ports.ini"
+    : >"$ROSTER_PORTS_CFG"
+    for port in 1 2 3 4; do
+        if [ "$port" -le "$roster_count" ]; then
+            printf '[Input-SDL-Control%s]\nplugged = True\n' "$port" \
+                >>"$ROSTER_PORTS_CFG"
+        else
+            printf '[Input-SDL-Control%s]\nplugged = False\ndevice = -1\n' "$port" \
+                >>"$ROSTER_PORTS_CFG"
+        fi
+    done
+    "$INI" merge "$DEVICE_CFG" "$ROSTER_PORTS_CFG" || true
+    rm -f "$ROSTER_PORTS_CFG"
+    echo "[mupen64plus] launch roster: $roster_count controller(s) plugged"
+fi
+
 resolve_font() {
     if [ -n "${CAT_FONT_PATH:-}" ]; then
         case "$CAT_FONT_PATH" in
@@ -302,11 +367,33 @@ export MUPEN64PLUS_C_BUTTON_B_BUTTON="${MUPEN64PLUS_C_BUTTON_B_BUTTON:-0}"
 export MUPEN64PLUS_C_BUTTON_X_BUTTON="${MUPEN64PLUS_C_BUTTON_X_BUTTON:-2}"
 export MUPEN64PLUS_C_BUTTON_Y_BUTTON="${MUPEN64PLUS_C_BUTTON_Y_BUTTON:-3}"
 export EMU_OVERLAY_JOYSTICK_INDEX="${EMU_OVERLAY_JOYSTICK_INDEX:-0}"
-export EMU_MENU_BUTTON="${EMU_MENU_BUTTON:-10}"
-export EMU_SELECT_BUTTON="${EMU_SELECT_BUTTON:-8}"
-export EMU_START_BUTTON="${EMU_START_BUTTON:-9}"
-export EMU_L1_BUTTON="${EMU_L1_BUTTON:-4}"
-export EMU_R1_BUTTON="${EMU_R1_BUTTON:-5}"
+
+# Every EMU_*_BUTTON index below describes the built-in pad's raw button
+# layout. The overlay watches roster slot 0, which is the built-in pad only
+# while nothing is paired -- with a wireless controller connected that slot is
+# the wireless pad, whose buttons sit at different indices. Forcing the
+# built-in numbers there binds the menu to whichever button happens to share
+# the index: on an Xbox pad index 10 is View, which is exactly what opened the
+# menu while Guide did nothing. Leave them unset for a wireless slot 0 so the
+# overlay resolves that pad's own Guide and Back from SDL's controller
+# database. An index the caller set explicitly still wins either way.
+overlay_pad_is_builtin=1
+if [ -n "${SDL_JOYSTICK_DEVICE:-}" ]; then
+    overlay_first_pad="${SDL_JOYSTICK_DEVICE%%:*}"
+    overlay_virtual_pad="${JAWAKA_INPUT_VIRTUAL_EVENT:-${JAWAKA_RETROARCH_VIRTUAL_EVENT:-}}"
+    if [ -n "$overlay_virtual_pad" ] &&
+       [ "$overlay_first_pad" != "$overlay_virtual_pad" ]; then
+        overlay_pad_is_builtin=0
+        echo "[mupen64plus] overlay pad: $overlay_first_pad (wireless); resolving its own buttons"
+    fi
+fi
+if [ "$overlay_pad_is_builtin" = "1" ]; then
+    export EMU_MENU_BUTTON="${EMU_MENU_BUTTON:-10}"
+    export EMU_SELECT_BUTTON="${EMU_SELECT_BUTTON:-8}"
+    export EMU_START_BUTTON="${EMU_START_BUTTON:-9}"
+    export EMU_L1_BUTTON="${EMU_L1_BUTTON:-4}"
+    export EMU_R1_BUTTON="${EMU_R1_BUTTON:-5}"
+fi
 export EMU_L2_BUTTON="${EMU_L2_BUTTON:-6}"
 export EMU_R2_BUTTON="${EMU_R2_BUTTON:-7}"
 export EMU_L2_AXIS="${EMU_L2_AXIS:--1}"
