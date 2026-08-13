@@ -367,11 +367,33 @@ export MUPEN64PLUS_C_BUTTON_B_BUTTON="${MUPEN64PLUS_C_BUTTON_B_BUTTON:-0}"
 export MUPEN64PLUS_C_BUTTON_X_BUTTON="${MUPEN64PLUS_C_BUTTON_X_BUTTON:-2}"
 export MUPEN64PLUS_C_BUTTON_Y_BUTTON="${MUPEN64PLUS_C_BUTTON_Y_BUTTON:-3}"
 export EMU_OVERLAY_JOYSTICK_INDEX="${EMU_OVERLAY_JOYSTICK_INDEX:-0}"
-export EMU_MENU_BUTTON="${EMU_MENU_BUTTON:-10}"
-export EMU_SELECT_BUTTON="${EMU_SELECT_BUTTON:-8}"
-export EMU_START_BUTTON="${EMU_START_BUTTON:-9}"
-export EMU_L1_BUTTON="${EMU_L1_BUTTON:-4}"
-export EMU_R1_BUTTON="${EMU_R1_BUTTON:-5}"
+
+# Every EMU_*_BUTTON index below describes the built-in pad's raw button
+# layout. The overlay watches roster slot 0, which is the built-in pad only
+# while nothing is paired -- with a wireless controller connected that slot is
+# the wireless pad, whose buttons sit at different indices. Forcing the
+# built-in numbers there binds the menu to whichever button happens to share
+# the index: on an Xbox pad index 10 is View, which is exactly what opened the
+# menu while Guide did nothing. Leave them unset for a wireless slot 0 so the
+# overlay resolves that pad's own Guide and Back from SDL's controller
+# database. An index the caller set explicitly still wins either way.
+overlay_pad_is_builtin=1
+if [ -n "${SDL_JOYSTICK_DEVICE:-}" ]; then
+    overlay_first_pad="${SDL_JOYSTICK_DEVICE%%:*}"
+    overlay_virtual_pad="${JAWAKA_INPUT_VIRTUAL_EVENT:-${JAWAKA_RETROARCH_VIRTUAL_EVENT:-}}"
+    if [ -n "$overlay_virtual_pad" ] &&
+       [ "$overlay_first_pad" != "$overlay_virtual_pad" ]; then
+        overlay_pad_is_builtin=0
+        echo "[mupen64plus] overlay pad: $overlay_first_pad (wireless); resolving its own buttons"
+    fi
+fi
+if [ "$overlay_pad_is_builtin" = "1" ]; then
+    export EMU_MENU_BUTTON="${EMU_MENU_BUTTON:-10}"
+    export EMU_SELECT_BUTTON="${EMU_SELECT_BUTTON:-8}"
+    export EMU_START_BUTTON="${EMU_START_BUTTON:-9}"
+    export EMU_L1_BUTTON="${EMU_L1_BUTTON:-4}"
+    export EMU_R1_BUTTON="${EMU_R1_BUTTON:-5}"
+fi
 export EMU_L2_BUTTON="${EMU_L2_BUTTON:-6}"
 export EMU_R2_BUTTON="${EMU_R2_BUTTON:-7}"
 export EMU_L2_AXIS="${EMU_L2_AXIS:--1}"

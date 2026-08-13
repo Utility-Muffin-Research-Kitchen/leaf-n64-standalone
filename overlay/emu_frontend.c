@@ -47,6 +47,9 @@ static SDL_Joystick* s_joy = NULL;
 // joystick opens; -1 means "no better answer than the default".
 static int s_menu_button = -1;
 static int s_select_button = -1;
+static int s_start_button = -1;
+static int s_l1_button = -1;
+static int s_r1_button = -1;
 
 // ---------------------------------------------------------------------------
 // Overlay state
@@ -111,24 +114,24 @@ static int select_button_index(void) {
 }
 
 static int start_button_index(void) {
-	static int cached = -2;
-	if (cached == -2)
-		cached = env_int_range("EMU_START_BUTTON", 7, 0, 31);
-	return cached;
+	int env = env_int_range("EMU_START_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_start_button >= 0 ? s_start_button : 7;
 }
 
 static int l1_button_index(void) {
-	static int cached = -2;
-	if (cached == -2)
-		cached = env_int_range("EMU_L1_BUTTON", 4, 0, 31);
-	return cached;
+	int env = env_int_range("EMU_L1_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_l1_button >= 0 ? s_l1_button : 4;
 }
 
 static int r1_button_index(void) {
-	static int cached = -2;
-	if (cached == -2)
-		cached = env_int_range("EMU_R1_BUTTON", 5, 0, 31);
-	return cached;
+	int env = env_int_range("EMU_R1_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_r1_button >= 0 ? s_r1_button : 5;
 }
 
 static int l2_button_index(void) {
@@ -222,23 +225,37 @@ static void resolve_named_buttons(int device_index, const char* name) {
 		return;
 	}
 
-	SDL_GameControllerButtonBind bind =
-	    SDL_GameControllerGetBindForButton(gc, SDL_CONTROLLER_BUTTON_GUIDE);
-	if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON)
-		s_menu_button = bind.value.button;
-
-	bind = SDL_GameControllerGetBindForButton(gc, SDL_CONTROLLER_BUTTON_BACK);
-	if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON)
-		s_select_button = bind.value.button;
+	// The triggers are deliberately absent: on most pads they are analog axes
+	// rather than buttons, and the overlay already reads them through its own
+	// axis path.
+	struct {
+		SDL_GameControllerButton canonical;
+		int* out;
+	} wanted[] = {
+		{ SDL_CONTROLLER_BUTTON_GUIDE, &s_menu_button },
+		{ SDL_CONTROLLER_BUTTON_BACK, &s_select_button },
+		{ SDL_CONTROLLER_BUTTON_START, &s_start_button },
+		{ SDL_CONTROLLER_BUTTON_LEFTSHOULDER, &s_l1_button },
+		{ SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, &s_r1_button },
+	};
+	for (size_t i = 0; i < sizeof(wanted) / sizeof(wanted[0]); i++) {
+		SDL_GameControllerButtonBind bind =
+		    SDL_GameControllerGetBindForButton(gc, wanted[i].canonical);
+		if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON)
+			*wanted[i].out = bind.value.button;
+	}
 
 	// Only the bindings were wanted; the overlay polls the joystick directly.
 	SDL_GameControllerClose(gc);
 
 	fprintf(stderr,
-	        "[Overlay] %s: menu button=%d select button=%d\n",
+	        "[Overlay] %s: menu=%d select=%d start=%d l1=%d r1=%d\n",
 	        name ? name : "(unknown)",
 	        s_menu_button,
-	        s_select_button);
+	        s_select_button,
+	        s_start_button,
+	        s_l1_button,
+	        s_r1_button);
 }
 
 static void ensure_overlay_joystick_open(void) {
