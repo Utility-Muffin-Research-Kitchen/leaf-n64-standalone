@@ -40,6 +40,13 @@ static bool s_initialized = false;
 
 // Joystick (managed by emu_frontend for power button + input polling)
 static SDL_Joystick* s_joy = NULL;
+// Raw button indices for Menu and Select on the pad actually in use. SDL
+// numbers joystick buttons in evdev code order, so a controller that reports
+// analog-trigger buttons shifts every button after them: index 8 is the
+// built-in pad's Menu but an Xbox pad's View. Resolved per device when the
+// joystick opens; -1 means "no better answer than the default".
+static int s_menu_button = -1;
+static int s_select_button = -1;
 
 // ---------------------------------------------------------------------------
 // Overlay state
@@ -88,17 +95,19 @@ static int env_int_range(const char* name, int fallback, int min_value, int max_
 }
 
 static int menu_button_index(void) {
-	static int cached = -2;
-	if (cached == -2)
-		cached = env_int_range("EMU_MENU_BUTTON", 8, 0, 31);
-	return cached;
+	// An explicit override always wins; otherwise prefer the index resolved
+	// from the connected pad, and fall back to the built-in pad's layout.
+	int env = env_int_range("EMU_MENU_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_menu_button >= 0 ? s_menu_button : 8;
 }
 
 static int select_button_index(void) {
-	static int cached = -2;
-	if (cached == -2)
-		cached = env_int_range("EMU_SELECT_BUTTON", 6, 0, 31);
-	return cached;
+	int env = env_int_range("EMU_SELECT_BUTTON", -1, 0, 31);
+	if (env >= 0)
+		return env;
+	return s_select_button >= 0 ? s_select_button : 6;
 }
 
 static int start_button_index(void) {
@@ -167,6 +176,60 @@ static int overlay_joystick_index(void) {
 	return cached;
 }
 
+// The built-in pad and Jawaka's calibrated clone of it share this name. Its
+// raw layout is what the overlay's defaults were written against, and SDL's
+// own mapping for that name disagrees with the hardware, so it keeps the
+// defaults rather than going through the controller database.
+#define BUILTIN_PAD_NAME "Loong Gamepad"
+
+// Ask SDL's controller database which raw joystick button carries a canonical
+// one. Everything else in the overlay reads raw buttons, hats and axes, so
+// translating just the two named buttons keeps a wireless pad working without
+// reworking the input path.
+static void resolve_named_buttons(int device_index, const char* name) {
+	s_menu_button = -1;
+	s_select_button = -1;
+
+	if (name && strcmp(name, BUILTIN_PAD_NAME) == 0)
+		return;
+
+	// mupen64plus brings up the joystick subsystem, not this one, and without
+	// it the lookup below just fails quietly and leaves the wrong button
+	// bound. Init is reference-counted, so asking again is harmless.
+	if (!SDL_WasInit(SDL_INIT_GAMECONTROLLER) &&
+	    SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
+		fprintf(stderr,
+		        "[Overlay] GameController init failed: %s\n",
+		        SDL_GetError());
+		return;
+	}
+
+	if (!SDL_IsGameController(device_index))
+		return;
+
+	SDL_GameController* gc = SDL_GameControllerOpen(device_index);
+	if (!gc)
+		return;
+
+	SDL_GameControllerButtonBind bind =
+	    SDL_GameControllerGetBindForButton(gc, SDL_CONTROLLER_BUTTON_GUIDE);
+	if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON)
+		s_menu_button = bind.value.button;
+
+	bind = SDL_GameControllerGetBindForButton(gc, SDL_CONTROLLER_BUTTON_BACK);
+	if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON)
+		s_select_button = bind.value.button;
+
+	// Only the bindings were wanted; the overlay polls the joystick directly.
+	SDL_GameControllerClose(gc);
+
+	fprintf(stderr,
+	        "[Overlay] %s: menu button=%d select button=%d\n",
+	        name ? name : "(unknown)",
+	        s_menu_button,
+	        s_select_button);
+}
+
 static void ensure_overlay_joystick_open(void) {
 	if (s_joy)
 		return;
@@ -188,6 +251,7 @@ static void ensure_overlay_joystick_open(void) {
 	s_joy = SDL_JoystickOpen(index);
 	if (s_joy) {
 		const char* name = SDL_JoystickName(s_joy);
+		resolve_named_buttons(index, name);
 		fprintf(stderr,
 		        "[Overlay] Joystick %d/%d opened: %s buttons=%d axes=%d hats=%d\n",
 		        index,
