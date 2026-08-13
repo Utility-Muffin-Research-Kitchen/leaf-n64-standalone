@@ -72,7 +72,7 @@ DOCKER_SCRIPT := /build/src/.docker-env.sh
 # Top-level targets
 # ══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build build-mlp1 package-mlp1 tg5040 tg5050 gliden64 rice dist clone patch patches clean \
+.PHONY: all build build-mlp1 package-mlp1 check-loong-autocfg tg5040 tg5050 gliden64 rice dist clone patch patches clean \
        ini-tg5040 ini-tg5050
 
 build: clone patch
@@ -92,7 +92,10 @@ all:
 	@echo "=== Build complete. dist/N64.pak/ assembled ==="
 	@find $(DIST) -type f | sort
 
-build-mlp1:
+check-loong-autocfg:
+	python3 scripts/check-loong-autocfg.py
+
+build-mlp1: check-loong-autocfg
 	DOCKER="$(DOCKER)" TOOLCHAIN_IMAGE="$(TOOLCHAIN_IMAGE)" ./build-mlp1.sh
 
 package-mlp1: build-mlp1
@@ -293,6 +296,7 @@ define DIST_COMMON
 	cp $(SRC)/GLideN64/src/build/plugin/Release/mupen64plus-video-GLideN64.so $(1)/
 	cp $(SRC)/mupen64plus-core/data/mupen64plus.ini    $(1)/
 	cp $(SRC)/mupen64plus-input-sdl/data/InputAutoCfg.ini $(1)/
+	cat $(CONFIG)/shared/loong-autocfg.ini >> $(1)/InputAutoCfg.ini
 	cp $(SRC)/mupen64plus-core/data/mupencheat.txt     $(1)/
 	cp $(SRC)/mupen64plus-video-rice/data/RiceVideoLinux.ini $(1)/
 	cp $(SRC)/7zip/7zzs                                $(1)/
