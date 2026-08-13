@@ -190,8 +190,10 @@ static void resolve_named_buttons(int device_index, const char* name) {
 	s_menu_button = -1;
 	s_select_button = -1;
 
-	if (name && strcmp(name, BUILTIN_PAD_NAME) == 0)
+	if (name && strcmp(name, BUILTIN_PAD_NAME) == 0) {
+		fprintf(stderr, "[Overlay] built-in pad: keeping default buttons\n");
 		return;
+	}
 
 	// mupen64plus brings up the joystick subsystem, not this one, and without
 	// it the lookup below just fails quietly and leaves the wrong button
@@ -204,12 +206,21 @@ static void resolve_named_buttons(int device_index, const char* name) {
 		return;
 	}
 
-	if (!SDL_IsGameController(device_index))
+	if (!SDL_IsGameController(device_index)) {
+		fprintf(stderr,
+		        "[Overlay] joystick %d is not a recognised controller;"
+		        " keeping default buttons\n",
+		        device_index);
 		return;
+	}
 
 	SDL_GameController* gc = SDL_GameControllerOpen(device_index);
-	if (!gc)
+	if (!gc) {
+		fprintf(stderr,
+		        "[Overlay] GameController open failed: %s\n",
+		        SDL_GetError());
 		return;
+	}
 
 	SDL_GameControllerButtonBind bind =
 	    SDL_GameControllerGetBindForButton(gc, SDL_CONTROLLER_BUTTON_GUIDE);
