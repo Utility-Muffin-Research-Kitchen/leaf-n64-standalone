@@ -325,9 +325,15 @@ resolve_mlp1_virtual_gamepad() {
             virtual = 1
         }
         /^H: Handlers=/ {
+            # "H: Handlers=event6 dmcfreq" glues the first handler to the key,
+            # so the field is "Handlers=event6" and a bare /^event[0-9]+$/ test
+            # silently misses any device whose event node happens to come
+            # first. Strip the key before matching.
             for (i = 1; i <= NF; i++) {
-                if ($i ~ /^event[0-9]+$/) {
-                    event = $i
+                handler = $i
+                sub(/^Handlers=/, "", handler)
+                if (handler ~ /^event[0-9]+$/) {
+                    event = handler
                 }
             }
         }
