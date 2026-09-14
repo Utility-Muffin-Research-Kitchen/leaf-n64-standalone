@@ -9,8 +9,8 @@ set -eu
 leaf_log_probe() {
     # A real byte, not a zero-length write: a 0-byte write can succeed without
     # touching the device and would not detect EIO/EFBIG. The subshell ignores
-    # SIGXFSZ: at the FAT32 ceiling the kernel raises it and its default action
-    # would kill this shell before the write could fail with EFBIG.
+    # SIGXFSZ: past a file-size rlimit the kernel raises it, and its default
+    # action would kill this shell before the write could fail with EFBIG.
     ( trap '' XFSZ; printf '\n' ) 2>/dev/null
 }
 leaf_log_probe >/dev/null 2>&1 || true
@@ -263,9 +263,10 @@ resolve_font() {
     if [ -n "${CAT_FONT_PATH:-}" ]; then
         case "$CAT_FONT_PATH" in
             /*)
-                [ -f "$CAT_FONT_PATH" ] &&
+                if [ -f "$CAT_FONT_PATH" ]; then
                     printf '%s\n' "$CAT_FONT_PATH" 2>/dev/null || true
-                return 0
+                    return 0
+                fi
                 ;;
             *)
                 if [ -n "${CAT_FONTS_DIR:-}" ] && [ -f "$CAT_FONTS_DIR/$CAT_FONT_PATH" ]; then
