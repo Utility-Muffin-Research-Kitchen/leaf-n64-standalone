@@ -263,11 +263,13 @@ resolve_font() {
     if [ -n "${CAT_FONT_PATH:-}" ]; then
         case "$CAT_FONT_PATH" in
             /*)
-                [ -f "$CAT_FONT_PATH" ] && printf '%s\n' "$CAT_FONT_PATH" && return 0
+                [ -f "$CAT_FONT_PATH" ] &&
+                    printf '%s\n' "$CAT_FONT_PATH" 2>/dev/null || true
+                return 0
                 ;;
             *)
                 if [ -n "${CAT_FONTS_DIR:-}" ] && [ -f "$CAT_FONTS_DIR/$CAT_FONT_PATH" ]; then
-                    printf '%s\n' "$CAT_FONTS_DIR/$CAT_FONT_PATH"
+                    printf '%s\n' "$CAT_FONTS_DIR/$CAT_FONT_PATH" 2>/dev/null || true
                     return 0
                 fi
                 ;;
@@ -277,7 +279,7 @@ resolve_font() {
         "${UMRK_LAUNCHER_PATH:-$UMRK_PLATFORM_PATH/launcher}/res/font.ttf" \
         "${UMRK_LAUNCHER_PATH:-$UMRK_PLATFORM_PATH/launcher}/res/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf"; do
         if [ -f "$candidate" ]; then
-            printf '%s\n' "$candidate"
+            printf '%s\n' "$candidate" 2>/dev/null || true
             return 0
         fi
     done
