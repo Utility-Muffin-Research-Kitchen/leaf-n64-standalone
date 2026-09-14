@@ -3,10 +3,39 @@ PAK_DIR="$(dirname "$0")"
 EMU_TAG="$(basename "$PAK_DIR")"
 EMU_TAG="${EMU_TAG%.*}"
 set -x
+# LOG-SAFE-1. The session log lives on a FAT card and can go unwritable (a bad
+# cluster chain, a full card, or the FAT32 4 GiB per-file ceiling). stdout and
+# stderr here are inherited from the launcher and point at that file. Under
+# set -e a failed echo would abort this script and the game would never start,
+# so probe both once and fall back to /dev/null, then never let a log write
+# decide whether a game launches.
+leaf_log_probe() {
+    # A real byte, not a zero-length write: a 0-byte write can succeed without
+    # touching the device and would not detect EIO/EFBIG. The subshell ignores
+    # SIGXFSZ: at the FAT32 ceiling the kernel raises it and its default action
+    # would kill this shell before the write could fail with EFBIG.
+    ( trap '' XFSZ; printf '\n' ) 2>/dev/null
+}
+leaf_log_probe >/dev/null 2>&1 || true
+if ! leaf_log_probe; then
+    exec >/dev/null
+fi
+if ! leaf_log_probe >&2; then
+    exec 2>/dev/null
+fi
 
-rm -f "$LOGS_PATH/$EMU_TAG.txt"
-exec >>"$LOGS_PATH/$EMU_TAG.txt"
-exec 2>&1
+log() { ( trap '' XFSZ; printf '%s\n' "$*" ) 2>/dev/null || true; }
+
+# LOG-SAFE-1. The per-emulator log lives on the same FAT card as the session
+# log, so this redirect gets the same treatment: prove the file can take a real
+# byte, then either log there or log nowhere, but never fail the launch on it.
+rm -f "$LOGS_PATH/$EMU_TAG.txt" 2>/dev/null || true
+if leaf_log_probe >>"$LOGS_PATH/$EMU_TAG.txt"; then
+    exec >>"$LOGS_PATH/$EMU_TAG.txt"
+    exec 2>&1
+else
+    exec >/dev/null 2>&1
+fi
 
 BIN_DIR="$PAK_DIR/$PLATFORM"
 ROM="$1"
@@ -347,6 +376,13 @@ command -v sleepmon.elf >/dev/null && sleepmon.elf &
 
 # Launch from BIN_DIR so core library resolves via ./
 cd "$BIN_DIR"
+# LOG-SAFE-1. A failed redirect on this background command would silently
+# prevent the emulator from ever starting, so pick a writable log first.
+if leaf_log_probe >>"$LOGS_PATH/$EMU_TAG.mupen64plus.txt"; then
+    EMU_LOG="$LOGS_PATH/$EMU_TAG.mupen64plus.txt"
+else
+    EMU_LOG=/dev/null
+fi
 env LD_LIBRARY_PATH="$M64P_LD_LIBRARY_PATH" LD_PRELOAD="$M64P_LD_PRELOAD" \
     ./mupen64plus --fullscreen --resolution "$DEVICE_RESOLUTION" \
     --configdir "$DEVICE_CONFIG_DIR" \
@@ -367,7 +403,7 @@ env LD_LIBRARY_PATH="$M64P_LD_LIBRARY_PATH" LD_PRELOAD="$M64P_LD_PRELOAD" \
     --audio mupen64plus-audio-sdl.so \
     --input mupen64plus-input-sdl.so \
     --rsp mupen64plus-rsp-hle.so \
-    "$ROM" > "$LOGS_PATH/$EMU_TAG.mupen64plus.txt" 2>&1 &
+    "$ROM" > "$EMU_LOG" 2>&1 &
 EMU_PID=$!
 sleep 4
 

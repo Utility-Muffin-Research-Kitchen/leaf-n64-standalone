@@ -1,5 +1,27 @@
 #!/bin/sh
 set -eu
+# LOG-SAFE-1. The session log lives on a FAT card and can go unwritable (a bad
+# cluster chain, a full card, or the FAT32 4 GiB per-file ceiling). stdout and
+# stderr here are inherited from the launcher and point at that file. Under
+# set -e a failed echo would abort this script and the game would never start,
+# so probe both once and fall back to /dev/null, then never let a log write
+# decide whether a game launches.
+leaf_log_probe() {
+    # A real byte, not a zero-length write: a 0-byte write can succeed without
+    # touching the device and would not detect EIO/EFBIG. The subshell ignores
+    # SIGXFSZ: at the FAT32 ceiling the kernel raises it and its default action
+    # would kill this shell before the write could fail with EFBIG.
+    ( trap '' XFSZ; printf '\n' ) 2>/dev/null
+}
+leaf_log_probe >/dev/null 2>&1 || true
+if ! leaf_log_probe; then
+    exec >/dev/null
+fi
+if ! leaf_log_probe >&2; then
+    exec 2>/dev/null
+fi
+
+log() { ( trap '' XFSZ; printf '%s\n' "$*" ) 2>/dev/null || true; }
 
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -10,7 +32,7 @@ elif [ -n "${UMRK_ENV_FILE:-}" ] && [ -f "$UMRK_ENV_FILE" ]; then
 fi
 
 if [ "$#" -lt 1 ]; then
-    echo "usage: launch.sh <rom-path>" >&2
+    log "usage: launch.sh <rom-path>"
     exit 64
 fi
 
@@ -54,8 +76,15 @@ mkdir -p \
     "$SCREENSHOT_DIR" \
     "$LOGS_PATH"
 
-exec >>"$LOGS_PATH/mupen64plus.log"
-exec 2>&1
+# LOG-SAFE-1. The mupen64plus log lives on the same FAT card as the session
+# log, so this redirect gets the same treatment: prove the file can take a real
+# byte, then either log there or log nowhere, but never fail the launch on it.
+if leaf_log_probe >>"$LOGS_PATH/mupen64plus.log"; then
+    exec >>"$LOGS_PATH/mupen64plus.log"
+    exec 2>&1
+else
+    exec >/dev/null 2>&1
+fi
 
 PAUSED_JAWAKA_PIDS=""
 
@@ -73,7 +102,7 @@ pause_foreground_jawaka_for_direct_launch() {
     done
 
     if [ -n "$PAUSED_JAWAKA_PIDS" ]; then
-        echo "[mupen64plus] paused jawaka-launcher for direct launch: $PAUSED_JAWAKA_PIDS"
+        log "[mupen64plus] paused jawaka-launcher for direct launch: $PAUSED_JAWAKA_PIDS"
     fi
 }
 
@@ -82,7 +111,7 @@ resume_paused_jawaka() {
     for pid in $PAUSED_JAWAKA_PIDS; do
         kill -CONT "$pid" 2>/dev/null || true
     done
-    echo "[mupen64plus] resumed jawaka-launcher after direct launch: $PAUSED_JAWAKA_PIDS"
+    log "[mupen64plus] resumed jawaka-launcher after direct launch: $PAUSED_JAWAKA_PIDS"
     PAUSED_JAWAKA_PIDS=""
 }
 
@@ -227,7 +256,7 @@ if [ -n "$roster_count" ] && [ "$roster_count" -ge 1 ]; then
     done
     "$INI" merge "$DEVICE_CFG" "$ROSTER_PORTS_CFG" || true
     rm -f "$ROSTER_PORTS_CFG"
-    echo "[mupen64plus] launch roster: $roster_count controller(s) plugged"
+    log "[mupen64plus] launch roster: $roster_count controller(s) plugged"
 fi
 
 resolve_font() {
@@ -272,7 +301,7 @@ case "$ROM" in
             ROM_INNER="$(find "$ROM_EXTRACT_DIR" -maxdepth 1 -type f -print | sort | head -n 1)"
         fi
         if [ -z "$ROM_INNER" ] || [ ! -f "$ROM_INNER" ]; then
-            echo "[mupen64plus] no ROM file found inside archive: $ORIGINAL_ROM" >&2
+            log "[mupen64plus] no ROM file found inside archive: $ORIGINAL_ROM"
             exit 1
         fi
         ROM_RENAMED="$ROM_EXTRACT_DIR/$ROM_STEM.z64"
@@ -354,9 +383,9 @@ if [ "$PLATFORM" = "mlp1" ] && [ -z "${SDL_JOYSTICK_DEVICE:-}" ]; then
 
     if [ -n "$MLP1_VIRTUAL_GAMEPAD" ] && [ -e "$MLP1_VIRTUAL_GAMEPAD" ]; then
         export SDL_JOYSTICK_DEVICE="$MLP1_VIRTUAL_GAMEPAD"
-        echo "[mupen64plus] using calibrated Jawaka virtual gamepad: $SDL_JOYSTICK_DEVICE"
+        log "[mupen64plus] using calibrated Jawaka virtual gamepad: $SDL_JOYSTICK_DEVICE"
     else
-        echo "[mupen64plus] calibrated Jawaka virtual gamepad not found; using SDL default joystick scan"
+        log "[mupen64plus] calibrated Jawaka virtual gamepad not found; using SDL default joystick scan"
     fi
 fi
 
@@ -390,7 +419,7 @@ if [ -n "${SDL_JOYSTICK_DEVICE:-}" ]; then
     if [ -n "$overlay_virtual_pad" ] &&
        [ "$overlay_first_pad" != "$overlay_virtual_pad" ]; then
         overlay_pad_is_builtin=0
-        echo "[mupen64plus] overlay pad: $overlay_first_pad (wireless); resolving its own buttons"
+        log "[mupen64plus] overlay pad: $overlay_first_pad (wireless); resolving its own buttons"
     fi
 fi
 if [ "$overlay_pad_is_builtin" = "1" ]; then
