@@ -392,11 +392,50 @@ if [ "$PLATFORM" = "mlp1" ] && [ -z "${SDL_JOYSTICK_DEVICE:-}" ]; then
     fi
 fi
 
-export DISPLAY_ROTATION="${MUPEN64PLUS_DISPLAY_ROTATION:-${DISPLAY_ROTATION:-270}}"
-if [ "$EMU_VIDEO_PLUGIN" = "gliden64" ]; then
+# Leaf says which screen the game is on (LEAF_DISPLAY_*, set by jawakad; unset
+# means the built-in panel). The panel is a portrait part mounted sideways, so
+# the picture and the overlay are rotated for it. A TV needs no rotation, and
+# gets the launcher's TV mode as the window: asking for 960x720 made SDL pick
+# 1024x768, a PC mode many TVs show as black, and left the picture stuck to the
+# left. Rice and GLideN64 centre a 4:3 picture themselves (AspectRatio = 1 in
+# default.cfg); HDMI Output Stretch fills the TV, as it does for RetroArch.
+DISPLAY_IS_TV=0
+DISPLAY_TV_SIZE=""
+RICE_ASPECT_SET=""
+GLIDEN64_ASPECT_SET=""
+if [ "${LEAF_DISPLAY_OUTPUT:-panel}" = hdmi ]; then
+    DISPLAY_IS_TV=1
+    display_size="${LEAF_DISPLAY_MODE:-}"
+    display_size="${display_size%%@*}"
+    case "$display_size" in
+        *x*)
+            display_w="${display_size%%x*}"
+            display_h="${display_size#*x}"
+            case "$display_w:$display_h" in
+                *[!0-9:]*|:*|*:) ;;
+                *) DISPLAY_TV_SIZE="${display_w}x${display_h}" ;;
+            esac
+            ;;
+    esac
+    if [ "${LEAF_DISPLAY_ASPECT:-4:3}" = stretch ]; then
+        RICE_ASPECT_SET="Video-Rice[AspectRatio]=0"
+        GLIDEN64_ASPECT_SET="Video-GLideN64[AspectRatio]=0"
+    fi
+fi
+
+if [ "$DISPLAY_IS_TV" = 1 ]; then
     export DISPLAY_ROTATION="${MUPEN64PLUS_DISPLAY_ROTATION:-0}"
-    export MUPEN64PLUS_GLIDEN64_FINAL_ROTATION="${MUPEN64PLUS_GLIDEN64_FINAL_ROTATION:-90}"
-    export MUPEN64PLUS_OVERLAY_ROTATION="${MUPEN64PLUS_OVERLAY_ROTATION:-270}"
+    if [ "$EMU_VIDEO_PLUGIN" = "gliden64" ]; then
+        export MUPEN64PLUS_GLIDEN64_FINAL_ROTATION="${MUPEN64PLUS_GLIDEN64_FINAL_ROTATION:-0}"
+        export MUPEN64PLUS_OVERLAY_ROTATION="${MUPEN64PLUS_OVERLAY_ROTATION:-0}"
+    fi
+else
+    export DISPLAY_ROTATION="${MUPEN64PLUS_DISPLAY_ROTATION:-${DISPLAY_ROTATION:-270}}"
+    if [ "$EMU_VIDEO_PLUGIN" = "gliden64" ]; then
+        export DISPLAY_ROTATION="${MUPEN64PLUS_DISPLAY_ROTATION:-0}"
+        export MUPEN64PLUS_GLIDEN64_FINAL_ROTATION="${MUPEN64PLUS_GLIDEN64_FINAL_ROTATION:-90}"
+        export MUPEN64PLUS_OVERLAY_ROTATION="${MUPEN64PLUS_OVERLAY_ROTATION:-270}"
+    fi
 fi
 export MUPEN64PLUS_C_BUTTON_MOD="${MUPEN64PLUS_C_BUTTON_MOD:-1}"
 export MUPEN64PLUS_C_BUTTON_MOD_BUTTON="${MUPEN64PLUS_C_BUTTON_MOD_BUTTON:-7}"
@@ -456,7 +495,11 @@ rm -f "$EMU_BUTTON_MAP_FILE"
 
 mkdir -p "$HOME" "$XDG_DATA_HOME"
 
-RESOLUTION="${MUPEN64PLUS_RESOLUTION:-${CAT_WINDOW_WIDTH:-960}x${CAT_WINDOW_HEIGHT:-720}}"
+if [ -n "$DISPLAY_TV_SIZE" ]; then
+    RESOLUTION="${MUPEN64PLUS_RESOLUTION:-$DISPLAY_TV_SIZE}"
+else
+    RESOLUTION="${MUPEN64PLUS_RESOLUTION:-${CAT_WINDOW_WIDTH:-960}x${CAT_WINDOW_HEIGHT:-720}}"
+fi
 SCREEN_W="${RESOLUTION%x*}"
 SCREEN_H="${RESOLUTION#*x}"
 
@@ -481,6 +524,8 @@ set +e
     --set "Video-GLideN64[ShowVIS]=False" \
     --set "Video-GLideN64[ShowPercent]=False" \
     --set "Video-Rice[ShowFPS]=False" \
+    ${RICE_ASPECT_SET:+--set} ${RICE_ASPECT_SET:+"$RICE_ASPECT_SET"} \
+    ${GLIDEN64_ASPECT_SET:+--set} ${GLIDEN64_ASPECT_SET:+"$GLIDEN64_ASPECT_SET"} \
     --gfx "$LIB_DIR/$GFX_PLUGIN" \
     --audio "$LIB_DIR/mupen64plus-audio-sdl.so" \
     --input "$LIB_DIR/mupen64plus-input-sdl.so" \
