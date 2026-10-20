@@ -596,6 +596,22 @@ static int default_input_mode(void) {
 	return 1; // D-Pad
 }
 
+// Decode the text after "input_mode =". The menu's save writes "dpad" or
+// "joystick" in quotes, write_input_mode_file() writes them bare. Older saves
+// stored the option index (0 = Joystick, 1 = D-Pad); only the Brick acted on
+// it, so elsewhere an index means the mode was never chosen. Must match
+// parse_input_mode_value() in the input-sdl patch.
+// Returns 1 for dpad, 0 for joystick, -1 for no usable value.
+static int parse_input_mode_value(const char* val) {
+	while (*val == ' ' || *val == '\t' || *val == '"') val++;
+	if (strncmp(val, "dpad", 4) == 0) return 1;
+	if (strncmp(val, "joystick", 8) == 0) return 0;
+	const char* d = getenv("DEVICE");
+	if ((val[0] == '0' || val[0] == '1') && d && strcmp(d, "brick") == 0)
+		return val[0] - '0';
+	return -1;
+}
+
 // Read the per-game input_mode from the per-game config file.
 // Returns 1 for dpad, 0 for joystick, -1 if file missing or key absent.
 static int read_input_mode_file(void) {
@@ -621,10 +637,8 @@ static int read_input_mode_file(void) {
 		}
 		if (section_kind && strncmp(trimmed, "input_mode", 10) == 0) {
 			char* eq = strchr(trimmed, '=');
-			if (eq) {
-				char* val = eq + 1;
-				while (*val == ' ') val++;
-				int parsed = (strncmp(val, "dpad", 4) == 0) ? 1 : 0;
+			int parsed = eq ? parse_input_mode_value(eq + 1) : -1;
+			if (parsed >= 0) {
 				if (section_kind == 2)
 					leaf_value = parsed;
 				else
@@ -714,6 +728,10 @@ static EmuOvlItem* find_input_mode_item(EmuOvlConfig* cfg) {
 static void load_input_mode_from_file(EmuOvlConfig* cfg) {
 	EmuOvlItem* item = find_input_mode_item(cfg);
 	if (!item) return;
+	// The JSON default can't know the device or the ROM. Store the real one so
+	// every reset path (the Controls page's Reset to Default included) lands
+	// on it instead of a fixed value.
+	item->default_value = default_input_mode();
 	int v = read_input_mode_file();
 	if (v < 0) {
 		v = default_input_mode();

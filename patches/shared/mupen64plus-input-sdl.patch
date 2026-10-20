@@ -1,5 +1,5 @@
 diff --git a/src/plugin.c b/src/plugin.c
-index 974b1db..93c6360 100644
+index 974b1db..8516f51 100644
 --- a/src/plugin.c
 +++ b/src/plugin.c
 @@ -27,6 +27,7 @@
@@ -21,7 +21,7 @@ index 974b1db..93c6360 100644
  /* definitions of pointers to Core config functions */
  ptr_ConfigOpenSection      ConfigOpenSection = NULL;
  ptr_ConfigDeleteSection    ConfigDeleteSection = NULL;
-@@ -481,6 +486,114 @@ EXPORT void CALL ControllerCommand(int Control, unsigned char *Command)
+@@ -481,6 +486,176 @@ EXPORT void CALL ControllerCommand(int Control, unsigned char *Command)
          }
  }
  
@@ -54,6 +54,51 @@ index 974b1db..93c6360 100644
 +        dflt = device_is_brick() ? 0 : 1;
 +    }
 +    return dflt;
++}
++
++/******************************************************************
++  Function: parse_input_mode_value
++  Purpose:  Decode the text after "input_mode =" in the per-game file.
++  input:    value text; the overlay writes dpad or joystick, with or
++            without quotes
++  output:   0 = joystick, 1 = dpad, -1 = no usable value
++*******************************************************************/
++static int parse_input_mode_value(const char* val)
++{
++    while (*val == ' ' || *val == '\t' || *val == '"')
++        val++;
++    if (strncmp(val, "dpad", 4) == 0)
++        return 1;
++    if (strncmp(val, "joystick", 8) == 0)
++        return 0;
++    /* Older "Save for this game" writes stored the option index instead
++     * (0 = Joystick, 1 = D-Pad). Only the Brick acted on it; everywhere else
++     * the option did nothing, so a stored index there means "never chosen". */
++    if ((val[0] == '0' || val[0] == '1') && device_is_brick())
++        return val[0] - '0';
++    return -1;
++}
++
++/******************************************************************
++  Function: hat_to_n64_dpad
++  Purpose:  Convert SDL hat bits to N64 d-pad bits. The orders differ:
++            SDL_HAT_UP/RIGHT/DOWN/LEFT are 0x1/0x2/0x4/0x8, the N64
++            d-pad bits are right 0x1, left 0x2, down 0x4, up 0x8.
++  input:    SDL_HAT_* bits
++  output:   N64 d-pad bits for controller.buttons.Value
++*******************************************************************/
++static unsigned int hat_to_n64_dpad(Uint8 hat)
++{
++    unsigned int bits = 0;
++    if (hat & SDL_HAT_RIGHT)
++        bits |= 0x0001;
++    if (hat & SDL_HAT_LEFT)
++        bits |= 0x0002;
++    if (hat & SDL_HAT_DOWN)
++        bits |= 0x0004;
++    if (hat & SDL_HAT_UP)
++        bits |= 0x0008;
++    return bits;
 +}
 +
 +/******************************************************************
@@ -105,7 +150,9 @@ index 974b1db..93c6360 100644
 +    {
 +        FILE* f = fopen(path, "r");
 +        char line[256];
-+        int in_section = 0;
++        int section = 0; /* 0 = other, 1 = legacy NextUI, 2 = Leaf */
++        int leaf_value = -1;
++        int legacy_value = -1;
 +        if (!f)
 +            return mode;
 +        while (fgets(line, sizeof(line), f)) {
@@ -113,22 +160,37 @@ index 974b1db..93c6360 100644
 +            while (*p == ' ' || *p == '\t')
 +                p++;
 +            if (*p == '[') {
-+                in_section = (strncmp(p, "[Leaf-Input]", 12) == 0 ||
-+                              strncmp(p, "[NextUI-Input]", 14) == 0);
++                if (strncmp(p, "[Leaf-Input]", 12) == 0)
++                    section = 2;
++                else if (strncmp(p, "[NextUI-Input]", 14) == 0)
++                    section = 1;
++                else
++                    section = 0;
 +                continue;
 +            }
-+            if (in_section && strncmp(p, "input_mode", 10) == 0) {
++            if (section && strncmp(p, "input_mode", 10) == 0) {
 +                char* eq = strchr(p, '=');
-+                char* val;
++                int v;
 +                if (!eq)
 +                    continue;
-+                val = eq + 1;
-+                while (*val == ' ' || *val == '\t')
-+                    val++;
-+                mode = (strncmp(val, "dpad", 4) == 0) ? 1 : 0;
++                v = parse_input_mode_value(eq + 1);
++                if (v < 0)
++                    continue;
++                if (section == 2)
++                    leaf_value = v;
++                else
++                    legacy_value = v;
 +            }
 +        }
 +        fclose(f);
++        /* Same precedence as the overlay: Leaf over legacy, and a file with no
++         * usable value means the device default. */
++        if (leaf_value >= 0)
++            mode = leaf_value;
++        else if (legacy_value >= 0)
++            mode = legacy_value;
++        else
++            mode = input_mode_default();
 +    }
 +    return mode;
 +}
@@ -136,7 +198,7 @@ index 974b1db..93c6360 100644
  /******************************************************************
    Function: GetKeys
    Purpose:  To get the current state of the controllers buttons.
-@@ -510,6 +623,10 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
+@@ -510,6 +685,10 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
      if (myKeyState[SDL_SCANCODE_RSHIFT])
          axis_max_val -= 25;
  
@@ -147,7 +209,7 @@ index 974b1db..93c6360 100644
      for ( b = 0; b < 4; ++b )
      {
          if (controller[b].device >= 0)
-@@ -614,6 +731,268 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
+@@ -614,6 +793,260 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
          controller[Control].buttons.Y_AXIS = iY;
      }
  
@@ -161,8 +223,7 @@ index 974b1db..93c6360 100644
 +     * InputAutoCfg mapping normally does that, but full-auto mode picks a
 +     * profile by SDL device name and can miss the built-in pad; doing it here
 +     * makes D-Pad mode work regardless of which profile matched. The runtime
-+     * remap block below still overrides these bits when the user reassigns a
-+     * d-pad row.
++     * remap block below still clears a direction the user bound to an action.
 +     * Brick is skipped: trimui_inputd already remaps the d-pad to virtual
 +     * analog axes there, and doing it twice would flatten its proportional
 +     * values to a digital full deflection. */
@@ -188,14 +249,7 @@ index 974b1db..93c6360 100644
 +                        controller[Control].buttons.Value &= ~0x000F; /* N64 d-pad */
 +                    }
 +                } else {
-+                    if (hat & SDL_HAT_RIGHT)
-+                        controller[Control].buttons.Value |= 0x0001;
-+                    if (hat & SDL_HAT_LEFT)
-+                        controller[Control].buttons.Value |= 0x0002;
-+                    if (hat & SDL_HAT_DOWN)
-+                        controller[Control].buttons.Value |= 0x0004;
-+                    if (hat & SDL_HAT_UP)
-+                        controller[Control].buttons.Value |= 0x0008;
++                    controller[Control].buttons.Value |= hat_to_n64_dpad(hat);
 +                }
 +            }
 +        }
@@ -375,7 +429,7 @@ index 974b1db..93c6360 100644
 +                    if (r->is_axis == 2) {
 +                        if (dpad_is_button_source && r->id == 0 &&
 +                            r->mod_type == 0 && (r->n64_bit & 0x000F) == 0)
-+                            claimed_dpad |= (r->axis_dir & 0x000F);
++                            claimed_dpad |= hat_to_n64_dpad((Uint8)r->axis_dir);
 +                        continue;
 +                    }
 +                    remap_mask |= r->n64_bit;
@@ -416,7 +470,7 @@ index 974b1db..93c6360 100644
      // process mouse events
      mstate = SDL_GetMouseState( NULL, NULL );
      for( b = 0; b < 16; b++ )
-@@ -1092,4 +1471,3 @@ EXPORT void CALL SDL_KeyUp(int keymod, int keysym)
+@@ -1092,4 +1525,3 @@ EXPORT void CALL SDL_KeyUp(int keymod, int keysym)
  {
      myKeyState[keysym] = 0;
  }

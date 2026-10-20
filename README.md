@@ -69,11 +69,11 @@ remappable row in **Options → Controls**. To make it send the C buttons:
 
 Behaviour:
 
-- **D-Pad** mode — a direction with an action bound to it sends that action
+- **D-Pad** mode - a direction with an action bound to it sends that action
   *instead of* the N64 d-pad direction. Directions with no binding keep their
   normal N64 d-pad behaviour. The action's original binding (for example
   **R2 + X** for C-Up) still works, because d-pad bindings are additive.
-- **Joystick** mode — the d-pad steers the N64 analog stick, so it does not
+- **Joystick** mode - the d-pad steers the N64 analog stick, so it does not
   trigger those C bindings. The normal C bindings (R2 + ABXY) still work.
 
 ## Quick Menu
