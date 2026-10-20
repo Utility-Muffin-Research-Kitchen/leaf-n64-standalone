@@ -46,6 +46,36 @@ Raw button indices are `B=0`, `A=1`, `X=2`, `Y=3`, `L1=4`, `R1=5`, `L2=6`,
 `R2=7`, `Select=8`, `Start=9`, and `Menu=10`. L2/R2 are buttons, not trigger
 axes; the d-pad is SDL hat 0; the analog stick is axes 0/1.
 
+### Input Mode (d-pad)
+
+The physical d-pad can either stay the N64 d-pad or steer the N64 analog stick,
+per game. Change it while playing with **Options → Controls → Input Mode**, or
+bind **Options → Shortcuts → Toggle Input Mode** to a button. The change applies
+immediately and is stored with the game.
+
+| Mode | Behaviour |
+|---|---|
+| **D-Pad** (default) | The d-pad sends N64 d-pad directions. The analog stick still controls the N64 analog stick. |
+| **Joystick** | The d-pad sends N64 analog-stick values, for games that only read the stick. |
+
+### Using the d-pad as C buttons (or any action)
+
+The N64 d-pad is permanently the physical d-pad, so it is not listed as a
+remappable row in **Options → Controls**. To make it send the C buttons:
+
+1. Open **Options → Controls**, select `C-Up`, press **A**.
+2. Press the d-pad direction you want (for example **d-pad Up**).
+3. Repeat for `C-Down`, `C-Left`, `C-Right`.
+
+Behaviour:
+
+- **D-Pad** mode — a direction with an action bound to it sends that action
+  *instead of* the N64 d-pad direction. Directions with no binding keep their
+  normal N64 d-pad behaviour. The action's original binding (for example
+  **R2 + X** for C-Up) still works, because d-pad bindings are additive.
+- **Joystick** mode — the d-pad steers the N64 analog stick, so it does not
+  trigger those C bindings. The normal C bindings (R2 + ABXY) still work.
+
 ## Quick Menu
 
 Press **Menu** while playing to open the quick menu.

@@ -158,22 +158,38 @@ caches; persistent user remaps live in the console or per-game `.cfg` files.
 | C-Right | Right analog right | R2 + A (right) |
 | D-Pad | D-pad (hat) | D-pad (see Input Mode below) |
 
-On Smart Pro and Smart Pro S both the left analog stick *and* the d-pad work independently and simultaneously — the config maps SDL axis 0/1 to the N64 analog and SDL hat 0 to the N64 d-pad, and the Brick-specific remap below is gated on `$DEVICE=brick` so it never touches those devices.
+On Smart Pro and Smart Pro S both the left analog stick *and* the d-pad work independently and simultaneously by default — the config maps SDL axis 0/1 to the N64 analog and SDL hat 0 to the N64 d-pad. The Brick-specific kernel remap below is gated on `$DEVICE=brick` so it never touches those devices.
 
-### Per-game input mode (Brick only)
+### Per-game input mode
 
-Because the Brick has no analog stick, the physical d-pad has to stand in for one of the two N64 directional inputs. The **Input Mode** setting decides which:
+The **Input Mode** setting decides what the physical d-pad sends. It is per-ROM and works on every device:
 
-- **Joystick** (default for most games) — the physical d-pad routes through the N64 analog stick. The N64 d-pad is inactive.
-- **D-Pad** — the physical d-pad passes through as the N64 d-pad (the config-mapped hat). The N64 analog stick is inactive.
+- **D-Pad** — the d-pad passes through as the N64 d-pad (default on devices with a real analog stick). The analog stick, when present, still controls the N64 analog stick.
+- **Joystick** — the physical d-pad is routed through the N64 analog stick and the N64 d-pad bits are cleared (default on Brick, which has no analog stick).
 
-Smart Pro and Smart Pro S both have a real left analog stick, so this remap is disabled on them — `emu_frontend.c` gates the d-pad remap on `$DEVICE=brick` via trimui_inputd flag files at `/tmp/trimui_inputd/`. The **Input → Input Mode** overlay menu item is still visible on those devices but toggling it is a no-op.
+The implementation depends on the device:
 
-On the Brick, the setting is **per-ROM**: each game gets its own file at `$DEVICE_CONFIG_DIR/per-game/<rom>.cfg` containing `input_mode=joystick` or `input_mode=dpad`. On first launch the default is chosen by substring-matching the ROM's GoodName (resolved by mupen64plus-core from `mupen64plus.ini` by CRC/MD5) against a hardcoded list in `overlay/emu_frontend.c` — the following games default to **D-Pad**:
+- **Brick**: `emu_frontend.c` writes `input_mode` to the per-game file and flips trimui_inputd flag files at `/tmp/trimui_inputd/`, which remap the d-pad to virtual analog axes at the kernel input layer.
+- **Leaf / MLP1, Smart Pro, Smart Pro S**: the input-sdl plugin reads `$EMU_INPUT_MODE_FILE` (the same per-game cfg) on every `GetKeys()` call via `stat()` mtime caching and does the remap in software. Brick is skipped there because the kernel already did it.
+
+On the Brick the setting is stored at `$DEVICE_CONFIG_DIR/per-game/<rom>.cfg` as `input_mode = joystick` or `input_mode = dpad`. On first launch the default is chosen by substring-matching the ROM's GoodName (resolved by mupen64plus-core from `mupen64plus.ini` by CRC/MD5) against a hardcoded list in `overlay/emu_frontend.c` — the following games default to **D-Pad**:
 
 Kirby 64: The Crystal Shards, Hoshi no Kirby 64, Mischief Makers, Tetris 64, Tetrisphere, Ms. Pac-Man - Maze Madness, Mortal Kombat 4, Mortal Kombat Trilogy, Killer Instinct Gold, Pokémon Puzzle League, WWF No Mercy, ClayFighter 63⅓, ClayFighter - Sculptor's Cut, WWF WarZone.
 
-All other games default to **Joystick**. Change it live via the overlay menu's **Input → Input Mode** item, or by binding **Shortcuts → Toggle Input Mode** to any face/shoulder button — both write through to the per-game file and the input plugin picks up the change within a frame (stat-mtime polling).
+All other Brick games default to **Joystick**. Devices with a real analog stick default to **D-Pad** and do not create a per-game file until the mode is changed, so simply launching a game does not switch it to game scope.
+
+Change it live via the overlay menu's **Options → Controls → Input Mode** item, or by binding **Options → Shortcuts → Toggle Input Mode** to any face/shoulder button — both write through to the per-game file and the input plugin picks up the change within a frame (stat-mtime polling). Restoring defaults removes the per-game value and the plugin falls back to the device default without a restart.
+
+### D-pad as C buttons (or any action source)
+
+The N64 d-pad is **not** a remap target: it is permanently the physical d-pad, so the **Controls** page only lists the 10 action buttons. The d-pad can still be captured as the source of any of them (for example `C-Up = D-Pad Up`). Bind capture accepts buttons, axes and hat directions; a hat binding is written to the runtime map file as type `h` with the `SDL_HAT_*` bit, and saved to the INI as `hat(N Up)`.
+
+Hat-sourced bindings are additive and mode-gated:
+
+- **D-Pad mode** — a direction claimed by an unmodified action binding sends that action and **stops sending the N64 d-pad direction** (the plugin clears that d-pad bit). Directions without a binding keep their normal N64 d-pad behaviour. The action's other sources are not cleared, so `R2 + X` still sends C-Up.
+- **Joystick mode** — type-`h` entries on hat 0 are inactive (the d-pad drives the analog stick); the target action's normal sources remain untouched.
+
+The mode is checked when the plugin evaluates type-`h` entries, so switching Input Mode applies within a frame.
 
 ### Brick-specific C-button remap
 
@@ -214,7 +230,7 @@ The overlay menu is defined in `config/shared/overlay_settings.json`. Items tagg
 | Audio | Resampling | Trivial / Zero-Order Hold / Linear / Sinc Fast / Sinc Medium / Sinc Best (restart required) |
 | Core | Video Plugin | Rice (default) / GLideN64 (restart required) |
 | Core | CPU Overclock | Off / 2× / 4× / 8× (restart required) |
-| Input | Input Mode | Joystick / D-Pad (Brick only, see [Per-game input mode](#per-game-input-mode-brick-only)) |
+| Controls | Input Mode | Joystick / D-Pad, per game (see [Per-game input mode](#per-game-input-mode)) |
 | Performance | CPU Mode | Powersave / Ondemand / Performance / Auto (applied on-demand) |
 | Performance | Rewind Buffer | Off / Small / Medium / Large |
 | Performance | Frame Skip | Off / 20fps / 25fps / 30fps (applied on-demand) |

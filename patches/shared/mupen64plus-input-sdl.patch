@@ -1,5 +1,5 @@
 diff --git a/src/plugin.c b/src/plugin.c
-index 974b1db..4e5f38f 100644
+index 974b1db..93c6360 100644
 --- a/src/plugin.c
 +++ b/src/plugin.c
 @@ -27,6 +27,7 @@
@@ -21,7 +21,122 @@ index 974b1db..4e5f38f 100644
  /* definitions of pointers to Core config functions */
  ptr_ConfigOpenSection      ConfigOpenSection = NULL;
  ptr_ConfigDeleteSection    ConfigDeleteSection = NULL;
-@@ -510,6 +515,10 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
+@@ -481,6 +486,114 @@ EXPORT void CALL ControllerCommand(int Control, unsigned char *Command)
+         }
+ }
+ 
++/******************************************************************
++  Function: device_is_brick
++  Purpose:  TrimUI Brick remaps the d-pad in trimui_inputd, not here.
++  output:   1 on Brick, 0 elsewhere
++*******************************************************************/
++static int device_is_brick(void)
++{
++    static int brick = -1;
++    if (brick < 0) {
++        const char* d = getenv("DEVICE");
++        brick = (d && strcmp(d, "brick") == 0) ? 1 : 0;
++    }
++    return brick;
++}
++
++/******************************************************************
++  Function: input_mode_default
++  Purpose:  D-pad mode used when the per-game file has no setting.
++  output:   0 = joystick, 1 = dpad
++*******************************************************************/
++static int input_mode_default(void)
++{
++    static int dflt = -1;
++    if (dflt < 0) {
++        /* Devices with a real analog stick keep the d-pad as the N64 d-pad;
++         * Brick has no stick, so the d-pad has to stand in for one. */
++        dflt = device_is_brick() ? 0 : 1;
++    }
++    return dflt;
++}
++
++/******************************************************************
++  Function: get_input_mode
++  Purpose:  Read the per-game d-pad mode written by the overlay.
++  input:    none
++  output:   0 = joystick (physical d-pad drives the N64 analog stick)
++            1 = dpad (physical d-pad stays the N64 d-pad)
++*******************************************************************/
++static int get_input_mode(void)
++{
++    static const char* path = NULL;
++    static int path_checked = 0;
++    static time_t mtime = 0;
++    static long file_size = -1;
++    static int loaded = 0;
++    static int mode = -1;
++
++    if (!path_checked) {
++        path = getenv("EMU_INPUT_MODE_FILE");
++        path_checked = 1;
++    }
++    if (mode < 0)
++        mode = input_mode_default();
++    if (!path || path[0] == '\0')
++        return mode;
++
++    {
++        struct stat st;
++        if (stat(path, &st) != 0) {
++            /* The overlay deletes the per-game file when the user restores
++             * defaults: fall back to the device default without a restart. */
++            mode = input_mode_default();
++            loaded = 0;
++            mtime = 0;
++            file_size = -1;
++            return mode;
++        }
++        /* FAT timestamps have 2-second granularity, so compare the size too:
++         * "joystick" and "dpad" differ in length, which makes a toggle visible
++         * even when both writes land in the same timestamp tick. */
++        if (loaded && st.st_mtime == mtime && (long)st.st_size == file_size)
++            return mode;
++        mtime = st.st_mtime;
++        file_size = (long)st.st_size;
++        loaded = 1;
++    }
++
++    {
++        FILE* f = fopen(path, "r");
++        char line[256];
++        int in_section = 0;
++        if (!f)
++            return mode;
++        while (fgets(line, sizeof(line), f)) {
++            char* p = line;
++            while (*p == ' ' || *p == '\t')
++                p++;
++            if (*p == '[') {
++                in_section = (strncmp(p, "[Leaf-Input]", 12) == 0 ||
++                              strncmp(p, "[NextUI-Input]", 14) == 0);
++                continue;
++            }
++            if (in_section && strncmp(p, "input_mode", 10) == 0) {
++                char* eq = strchr(p, '=');
++                char* val;
++                if (!eq)
++                    continue;
++                val = eq + 1;
++                while (*val == ' ' || *val == '\t')
++                    val++;
++                mode = (strncmp(val, "dpad", 4) == 0) ? 1 : 0;
++            }
++        }
++        fclose(f);
++    }
++    return mode;
++}
++
+ /******************************************************************
+   Function: GetKeys
+   Purpose:  To get the current state of the controllers buttons.
+@@ -510,6 +623,10 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
      if (myKeyState[SDL_SCANCODE_RSHIFT])
          axis_max_val -= 25;
  
@@ -32,10 +147,60 @@ index 974b1db..4e5f38f 100644
      for ( b = 0; b < 4; ++b )
      {
          if (controller[b].device >= 0)
-@@ -614,6 +623,193 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
+@@ -614,6 +731,268 @@ EXPORT void CALL GetKeys( int Control, BUTTONS *Keys )
          controller[Control].buttons.Y_AXIS = iY;
      }
  
++    /* Per-game d-pad mode, for devices whose d-pad is a real SDL hat.
++     * "joystick" routes the hat through the N64 analog stick, so games that
++     * only read the stick can still be steered with it; the N64 d-pad bits are
++     * cleared because the d-pad is not a d-pad in this mode. Y is positive up
++     * and X positive right in this packed BUTTONS value, matching the axis
++     * conversion above.
++     * "dpad" forces the hat onto the N64 d-pad bits as well. The config or
++     * InputAutoCfg mapping normally does that, but full-auto mode picks a
++     * profile by SDL device name and can miss the built-in pad; doing it here
++     * makes D-Pad mode work regardless of which profile matched. The runtime
++     * remap block below still overrides these bits when the user reassigns a
++     * d-pad row.
++     * Brick is skipped: trimui_inputd already remaps the d-pad to virtual
++     * analog axes there, and doing it twice would flatten its proportional
++     * values to a digital full deflection. */
++    {
++        SDL_Joystick *joy = controller[Control].joystick;
++        if (joy && Control == 0 && !device_is_brick()) {
++            Uint8 hat = SDL_JoystickGetHat(joy, 0);
++            if (hat != SDL_HAT_CENTERED) {
++                if (get_input_mode() == 0) {
++                    int hatX = 0;
++                    int hatY = 0;
++                    if (hat & SDL_HAT_LEFT)
++                        hatX = -axis_max_val;
++                    if (hat & SDL_HAT_RIGHT)
++                        hatX = axis_max_val;
++                    if (hat & SDL_HAT_UP)
++                        hatY = axis_max_val;
++                    if (hat & SDL_HAT_DOWN)
++                        hatY = -axis_max_val;
++                    if (hatX != 0 || hatY != 0) {
++                        controller[Control].buttons.X_AXIS = hatX;
++                        controller[Control].buttons.Y_AXIS = hatY;
++                        controller[Control].buttons.Value &= ~0x000F; /* N64 d-pad */
++                    }
++                } else {
++                    if (hat & SDL_HAT_RIGHT)
++                        controller[Control].buttons.Value |= 0x0001;
++                    if (hat & SDL_HAT_LEFT)
++                        controller[Control].buttons.Value |= 0x0002;
++                    if (hat & SDL_HAT_DOWN)
++                        controller[Control].buttons.Value |= 0x0004;
++                    if (hat & SDL_HAT_UP)
++                        controller[Control].buttons.Value |= 0x0008;
++                }
++            }
++        }
++    }
++
 +    /* Handheld C-button remap. Devices without a right analog stick can opt
 +     * in with MUPEN64PLUS_C_BUTTON_MOD=1; the Brick keeps its legacy default.
 +     * R2 + ABXY sends C-buttons by physical position. R2 defaults to axis 5
@@ -44,8 +209,9 @@ index 974b1db..4e5f38f 100644
 +     *   A (right) → C-Right, B (bottom) → C-Down,
 +     *   X (top) → C-Up, Y (left) → C-Left.
 +     *
-+     * D-pad↔joystick remapping is handled by trimui_inputd at the kernel
-+     * input layer (flag files in /tmp/trimui_inputd/), not here. */
++     * D-pad↔joystick remapping happens below and in trimui_inputd on the
++     * Brick: the kernel daemon covers Brick, the software path covers every
++     * device whose d-pad is still reported as a hat (Leaf / MLP1). */
 +    {
 +        static int enable_c_button_mod = -1;
 +        if (enable_c_button_mod < 0) {
@@ -123,8 +289,9 @@ index 974b1db..4e5f38f 100644
 +     * this file whenever the user changes a binding; we stat() it each frame
 +     * and re-parse only when the mtime changes. Each line is:
 +     *   <n64_bit_hex> <type> <id> [<dir>] [<mod_type> <mod_id>]
-+     * where type is 'b' (button) or 'a' (axis), id is the SDL index,
-+     * dir is +1/-1 for axes, and mod fields describe the modifier key. */
++     * where type is 'b' (button), 'a' (axis) or 'h' (hat direction), id is the
++     * SDL index, dir is +1/-1 for axes or the SDL_HAT_* bit for hats, and the
++     * mod fields describe the modifier key. */
 +    {
 +        /* N64 button bits used in controller.buttons.Value */
 +        #define N64_A      0x0080
@@ -141,9 +308,9 @@ index 974b1db..4e5f38f 100644
 +
 +        typedef struct {
 +            unsigned int n64_bit;
-+            int is_axis;    /* 0 = button, 1 = axis */
-+            int id;         /* SDL button or axis index */
-+            int axis_dir;   /* +1 or -1 for axes */
++            int is_axis;    /* 0 = button, 1 = axis, 2 = hat direction */
++            int id;         /* SDL button, axis or hat index */
++            int axis_dir;   /* +1/-1 for axes, SDL_HAT_* bit for hats */
 +            int mod_type;   /* 0 = none, 1 = button modifier */
 +            int mod_id;     /* SDL button index for modifier */
 +        } ButtonRemap;
@@ -176,7 +343,7 @@ index 974b1db..4e5f38f 100644
 +                                       &bit, &type, &id, &dir, &mt, &mid);
 +                        if (n >= 3) {
 +                            r->n64_bit = bit;
-+                            r->is_axis = (type == 'a') ? 1 : 0;
++                            r->is_axis = (type == 'a') ? 1 : ((type == 'h') ? 2 : 0);
 +                            r->id = id;
 +                            r->axis_dir = dir;
 +                            r->mod_type = mt;
@@ -190,16 +357,39 @@ index 974b1db..4e5f38f 100644
 +
 +            SDL_Joystick *joy = controller[Control].joystick;
 +            if (joy && Control == 0 && remap_count > 0) {
-+                /* Clear all remapped N64 bits first, then set based on physical state */
++                /* The built-in d-pad is a button source only in D-Pad mode. In
++                 * Joystick mode it drives the N64 analog stick, so bindings
++                 * such as C-Up = D-Pad Up are inactive. */
++                const int dpad_is_button_source = (get_input_mode() != 0);
++
++                /* Hat-sourced bindings are additive: they never clear the
++                 * target action's other sources (so R2+X still sends C-Up).
++                 * A direction claimed by an unmodified action binding stops
++                 * being an N64 d-pad direction instead, which lets the d-pad
++                 * act as C-Up/Down/Left/Right. Directions no action claims
++                 * keep their normal N64 d-pad behaviour. */
 +                unsigned int remap_mask = 0;
-+                for (int i = 0; i < remap_count; i++)
-+                    remap_mask |= remaps[i].n64_bit;
-+                controller[Control].buttons.Value &= ~remap_mask;
++                unsigned int claimed_dpad = 0;
++                for (int i = 0; i < remap_count; i++) {
++                    ButtonRemap* r = &remaps[i];
++                    if (r->is_axis == 2) {
++                        if (dpad_is_button_source && r->id == 0 &&
++                            r->mod_type == 0 && (r->n64_bit & 0x000F) == 0)
++                            claimed_dpad |= (r->axis_dir & 0x000F);
++                        continue;
++                    }
++                    remap_mask |= r->n64_bit;
++                }
++                controller[Control].buttons.Value &= ~(remap_mask | claimed_dpad);
 +
 +                for (int i = 0; i < remap_count; i++) {
 +                    ButtonRemap* r = &remaps[i];
 +                    int pressed = 0;
-+                    if (r->is_axis) {
++                    if (r->is_axis == 2) {
++                        if (r->id == 0 && !dpad_is_button_source)
++                            continue;
++                        pressed = (SDL_JoystickGetHat(joy, r->id) & r->axis_dir) != 0;
++                    } else if (r->is_axis) {
 +                        int val = SDL_JoystickGetAxis(joy, r->id);
 +                        pressed = (r->axis_dir > 0) ? (val > 24000) : (val < -24000);
 +                    } else {
@@ -226,7 +416,7 @@ index 974b1db..4e5f38f 100644
      // process mouse events
      mstate = SDL_GetMouseState( NULL, NULL );
      for( b = 0; b < 16; b++ )
-@@ -1092,4 +1288,3 @@ EXPORT void CALL SDL_KeyUp(int keymod, int keysym)
+@@ -1092,4 +1471,3 @@ EXPORT void CALL SDL_KeyUp(int keymod, int keysym)
  {
      myKeyState[keysym] = 0;
  }

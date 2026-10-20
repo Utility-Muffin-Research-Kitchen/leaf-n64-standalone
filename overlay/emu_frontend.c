@@ -497,14 +497,22 @@ static void apply_frame_skip_if_dirty(EmuOvlConfig* cfg) {
 }
 
 // ---------------------------------------------------------------------------
-// Input mode (d-pad vs joystick) — Brick only. Uses trimui_inputd flag files
-// at /tmp/trimui_inputd/ to remap the physical d-pad to virtual analog axes
-// at the kernel input layer. This is cleaner than our old input-sdl patch
-// approach: the daemon gives proper proportional axis values, and there's
-// zero per-frame overhead in the emulator process.
+// Input mode (d-pad vs joystick) — per game, on every device.
 //
-// The per-game default is chosen by matching the ROM's GoodName against the
-// list below. The user can toggle at runtime via the overlay menu or shortcut.
+// Brick: trimui_inputd flag files at /tmp/trimui_inputd/ remap the physical
+// d-pad to virtual analog axes at the kernel input layer. This is cleaner than
+// doing it in the emulator: the daemon gives proper proportional axis values,
+// and there's zero per-frame overhead in the emulator process.
+//
+// Devices with a real analog stick (Leaf / Miniloong Pocket 1): the input-sdl
+// plugin reads the same per-game file ($EMU_INPUT_MODE_FILE) and routes the
+// physical hat through the N64 analog stick in software when the mode is
+// "joystick". "dpad" leaves the d-pad on the N64 d-pad, which is the default on
+// those devices because the stick is already an N64 stick.
+//
+// The per-game default on Brick is chosen by matching the ROM's GoodName against
+// the list below. The user can toggle at runtime via the overlay menu or
+// shortcut; the change is written to the per-game file the plugin polls.
 // ---------------------------------------------------------------------------
 
 // Games that default to d-pad input on first run. Matched as a case-insensitive
@@ -558,9 +566,11 @@ static int dpad_default_for_current_rom(void) {
 // Apply input mode via trimui_inputd flag files. The daemon polls
 // /tmp/trimui_inputd/ and remaps d-pad to virtual analog at the kernel level.
 // mode 0 = joystick (d-pad → analog stick), mode 1 = dpad (passthrough).
+// Other devices need nothing here: the input-sdl plugin reads the per-game
+// file itself, so writing the file is what applies the change.
 static void apply_input_mode(int mode) {
 	const char* d = getenv("DEVICE");
-	if (!d || strcmp(d, "brick") != 0) return; // Brick-only
+	if (!d || strcmp(d, "brick") != 0) return; // Brick kernel remap only
 
 	if (mode == 0) {
 		// Joystick: d-pad becomes analog stick
@@ -574,6 +584,16 @@ static void apply_input_mode(int mode) {
 		unlink("/tmp/trimui_inputd/input_dpad_to_joystick");
 		unlink("/tmp/trimui_inputd/input_no_dpad");
 	}
+}
+
+// Default mode for a game that has no per-game input_mode yet. The Brick has no
+// analog stick, so the d-pad has to stand in for one and most games want that;
+// devices with a real stick should keep the d-pad as the N64 d-pad.
+static int default_input_mode(void) {
+	const char* d = getenv("DEVICE");
+	if (d && strcmp(d, "brick") == 0)
+		return dpad_default_for_current_rom();
+	return 1; // D-Pad
 }
 
 // Read the per-game input_mode from the per-game config file.
@@ -686,51 +706,50 @@ static EmuOvlItem* find_input_mode_item(EmuOvlConfig* cfg) {
 	return NULL;
 }
 
-// Load the per-game input mode into the overlay item and apply it via
-// trimui_inputd. On first launch for a ROM, seeds the default from the
-// GoodName auto-detect list. On non-Brick devices, early-returns (the
-// feature is Brick-only since those devices have real analog sticks).
+// Load the per-game input mode into the overlay item and apply it. On first
+// launch for a ROM, seeds the default: Brick picks from the GoodName list and
+// persists it, devices with a real stick default to D-Pad without creating a
+// per-game file (the plugin uses the same default when the file is absent, so
+// simply launching a game must not flip its save scope to "this game").
 static void load_input_mode_from_file(EmuOvlConfig* cfg) {
 	EmuOvlItem* item = find_input_mode_item(cfg);
 	if (!item) return;
-	const char* d = getenv("DEVICE");
-	if (!d || strcmp(d, "brick") != 0) return;
 	int v = read_input_mode_file();
 	if (v < 0) {
-		v = dpad_default_for_current_rom();
-		write_input_mode_file(v);
+		v = default_input_mode();
+		const char* d = getenv("DEVICE");
+		if (d && strcmp(d, "brick") == 0)
+			write_input_mode_file(v);
 	}
 	item->current_value = v;
 	item->staged_value = v;
 	item->dirty = false;
 	apply_input_mode(v);
+	fprintf(stderr, "[Overlay] Input mode: %s%s\n",
+	        v ? "dpad" : "joystick",
+	        read_input_mode_file() < 0 ? " (default)" : "");
 }
 
 // If the input_mode item is dirty (user changed it in the overlay menu),
-// apply via trimui_inputd and persist to the per-game file.
+// apply it and persist to the per-game file. Writing the file is what reaches
+// every device: Brick also flips the trimui_inputd flags, the input plugin
+// polls the file on the others.
 static void apply_input_mode_if_dirty(EmuOvlConfig* cfg) {
 	EmuOvlItem* item = find_input_mode_item(cfg);
 	if (!item || !item->dirty) return;
-	const char* d = getenv("DEVICE");
-	if (!d || strcmp(d, "brick") != 0) {
-		item->dirty = false;
-		return;
-	}
 	apply_input_mode(item->staged_value);
 	write_input_mode_file(item->staged_value);
 	item->current_value = item->staged_value;
 	item->dirty = false;
 }
 
-// Shortcut: toggle input mode. Applies via trimui_inputd and persists.
+// Shortcut: toggle input mode. Applies and persists.
 static void process_input_mode_shortcut(void) {
 	ShortcutBinding* s = find_shortcut("shortcut_toggle_input_mode");
 	if (!emu_frontend_shortcut_just_pressed(s))
 		return;
-	const char* d = getenv("DEVICE");
-	if (!d || strcmp(d, "brick") != 0) return;
 	int cur = read_input_mode_file();
-	if (cur < 0) cur = 0;
+	if (cur < 0) cur = default_input_mode();
 	int new_value = cur ? 0 : 1;
 	apply_input_mode(new_value);
 	write_input_mode_file(new_value);
@@ -745,7 +764,13 @@ static void process_input_mode_shortcut(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Button remapping (N64 action buttons → physical buttons)
+// Button remapping (N64 action buttons → physical inputs)
+//
+// The N64 d-pad is deliberately absent: it is always the physical d-pad and is
+// not a remap target. The d-pad can still be captured as the *source* of any
+// of these buttons (for example C-Up = D-Pad Up). In Joystick input mode the
+// d-pad drives the analog stick instead, and those hat-sourced bindings are
+// suppressed by the input plugin until the mode returns to D-Pad.
 // ---------------------------------------------------------------------------
 
 static N64ButtonMapping s_buttonMappings[N64_REMAP_COUNT] = {
@@ -810,12 +835,46 @@ static const char* button_label(int button) {
 	}
 }
 
+// Direction names used in mupen64plus config strings, e.g. hat(0 Up).
+static const char* hat_dir_cfg_name(int dir) {
+	switch (dir) {
+	case SDL_HAT_UP: return "Up";
+	case SDL_HAT_DOWN: return "Down";
+	case SDL_HAT_LEFT: return "Left";
+	case SDL_HAT_RIGHT: return "Right";
+	default: return "Up";
+	}
+}
+
+static const char* hat_dir_label(int dir) {
+	switch (dir) {
+	case SDL_HAT_UP: return emu_i18n("D-Pad Up");
+	case SDL_HAT_DOWN: return emu_i18n("D-Pad Down");
+	case SDL_HAT_LEFT: return emu_i18n("D-Pad Left");
+	case SDL_HAT_RIGHT: return emu_i18n("D-Pad Right");
+	default: return emu_i18n("D-Pad Up");
+	}
+}
+
+// Parse a direction token from "hat(0 Up)" / "hat(0 Up, Right)". The closing
+// parenthesis (and anything after a comma) is ignored, so the same helper
+// handles config strings and user input.
+static int hat_dir_from_name(const char* name) {
+	if (strncasecmp(name, "up", 2) == 0) return SDL_HAT_UP;
+	if (strncasecmp(name, "down", 4) == 0) return SDL_HAT_DOWN;
+	if (strncasecmp(name, "left", 4) == 0) return SDL_HAT_LEFT;
+	if (strncasecmp(name, "right", 5) == 0) return SDL_HAT_RIGHT;
+	return 0;
+}
+
 const char* emu_frontend_binding_label(const N64ButtonMapping* m) {
 	static char buf[64];
 	if (m->physical < 0) return emu_i18n("NONE");
 	const char* base;
 	char axis_buf[32];
-	if (m->is_axis) {
+	if (m->is_axis == 2) {
+		base = hat_dir_label(m->axis_dir);
+	} else if (m->is_axis) {
 		snprintf(axis_buf, sizeof(axis_buf), "%s %d%s", emu_i18n("Axis"), m->physical, m->axis_dir > 0 ? "+" : "-");
 		base = axis_buf;
 	} else {
@@ -829,14 +888,23 @@ const char* emu_frontend_binding_label(const N64ButtonMapping* m) {
 	return buf;
 }
 
-// Parse a mupen64plus-native binding string like "button(5)" or "axis(2+)"
-// into physical/is_axis/axis_dir. Returns true on success.
+// Parse a mupen64plus-native binding string like "button(5)", "axis(2+)" or
+// "hat(0 Up)" into physical/is_axis/axis_dir. Returns true on success.
 static bool parse_binding_string(const char* str, int* physical, int* is_axis, int* axis_dir) {
 	if (!str) return false;
 	// Strip surrounding quotes if present
 	while (*str == '"' || *str == ' ') str++;
 	int id;
 	char dir;
+	char hat_dir[16];
+	if (sscanf(str, "hat(%d %15s", &id, hat_dir) == 2) {
+		int parsed = hat_dir_from_name(hat_dir);
+		if (parsed == 0) return false;
+		*physical = id;
+		*is_axis = 2;
+		*axis_dir = parsed;
+		return true;
+	}
 	if (sscanf(str, "button(%d)", &id) == 1) {
 		*physical = id;
 		*is_axis = 0;
@@ -932,7 +1000,7 @@ void emu_frontend_write_button_map_file(void) {
 		else if (m->mod < 0) { mod_type = 2; mod_id = -(m->mod + 1); }
 		fprintf(f, "%04x %c %d %d %d %d\n",
 				m->n64_bit,
-				m->is_axis ? 'a' : 'b',
+				m->is_axis == 2 ? 'h' : (m->is_axis ? 'a' : 'b'),
 				m->physical,
 				m->axis_dir,
 				mod_type,
@@ -1298,6 +1366,9 @@ static void write_bindings_per_game(FILE* f) {
 		N64ButtonMapping* m = &s_buttonMappings[i];
 		if (m->physical < 0) {
 			fprintf(f, "%s = \"\"\n", m->cfg_key);
+		} else if (m->is_axis == 2) {
+			fprintf(f, "%s = \"hat(%d %s)\"\n", m->cfg_key,
+					m->physical, hat_dir_cfg_name(m->axis_dir));
 		} else if (m->is_axis) {
 			fprintf(f, "%s = \"axis(%d%s)\"\n", m->cfg_key,
 					m->physical, m->axis_dir > 0 ? "+" : "-");
@@ -2166,7 +2237,8 @@ static void overlay_ensure_init(int w, int h) {
 		if (pgp && pgp[0] != '\0')
 			emu_ovl_cfg_read_per_game(&s_overlayConfig, pgp);
 
-		// Load the per-game input mode (Brick-only; no-op on other devices)
+		// Load the per-game d-pad mode (applied through the input plugin
+		// on devices with a stick, through trimui_inputd on Brick)
 		load_input_mode_from_file(&s_overlayConfig);
 
 		// Load saved button mappings: first from console config
@@ -2403,6 +2475,7 @@ static EmuOvlAction run_overlay_loop(void) {
 		if (s_overlay.bind_capture >= 0 && s_joy) {
 			static int bc_prev_btn[32];
 			static int bc_prev_axis[8];
+			static Uint8 bc_prev_hat;
 			static bool bc_baselines_set;
 			// Pending dual-purpose input (SELECT/L2/R2 with no combo yet).
 			// type: 0=none, 1=button (SELECT/L2/R2), 2=axis (L2/R2)
@@ -2433,6 +2506,7 @@ static EmuOvlAction run_overlay_loop(void) {
 					if (na > 8) na = 8;
 					for (int a = 0; a < na; a++)
 						bc_prev_axis[a] = SDL_JoystickGetAxis(s_joy, a);
+					bc_prev_hat = SDL_JoystickGetHat(s_joy, 0);
 					bc_baselines_set = true;
 					bc_pending_type = 0;
 				}
@@ -2550,6 +2624,29 @@ static EmuOvlAction run_overlay_loop(void) {
 							break;
 						}
 					}
+				}
+
+				// --- Hat (d-pad) scan ---
+				// Controls may be bound to the physical d-pad. Shortcuts keep
+				// the button/axis model: their in-game checks don't track hat
+				// state, and "bind a shortcut to the d-pad" is not a use case
+				// the overlay menu navigation can support cleanly.
+				if (!bound && s_overlay.bind_capture < 1000) {
+					Uint8 hat = SDL_JoystickGetHat(s_joy, 0);
+					Uint8 pressed = hat & (Uint8)~bc_prev_hat;
+					int dir = 0;
+					if (pressed & SDL_HAT_UP)         dir = SDL_HAT_UP;
+					else if (pressed & SDL_HAT_DOWN)  dir = SDL_HAT_DOWN;
+					else if (pressed & SDL_HAT_LEFT)  dir = SDL_HAT_LEFT;
+					else if (pressed & SDL_HAT_RIGHT) dir = SDL_HAT_RIGHT;
+					if (dir) {
+						m->physical = 0;
+						m->is_axis = 2;
+						m->axis_dir = dir;
+						m->mod = (held_mod != 0) ? held_mod : 0;
+						bound = true;
+					}
+					bc_prev_hat = hat;
 				}
 
 				// --- Grace period for dual-purpose inputs (SELECT/L2/R2) ---
@@ -2727,6 +2824,9 @@ static void write_bindings_to_ini(const char* ini_path) {
 		N64ButtonMapping* m = &s_buttonMappings[i];
 		if (m->physical < 0) {
 			fprintf(f, "%s = \"\"\n", m->cfg_key);
+		} else if (m->is_axis == 2) {
+			fprintf(f, "%s = \"hat(%d %s)\"\n", m->cfg_key,
+					m->physical, hat_dir_cfg_name(m->axis_dir));
 		} else if (m->is_axis) {
 			fprintf(f, "%s = \"axis(%d%s)\"\n", m->cfg_key,
 					m->physical, m->axis_dir > 0 ? "+" : "-");
@@ -2876,6 +2976,21 @@ static void handle_restore_defaults(void) {
 	apply_cpu_mode(find_cpu_mode_value(&s_overlayConfig));
 	int fs = find_frame_skip_value(&s_overlayConfig);
 	if (fs >= 0) g_frameSkip = fs;
+
+	// Restoring defaults drops any per-game d-pad mode. Don't recreate the
+	// per-game file here (that would immediately flip the save scope back to
+	// "this game"): show the device default and let the input plugin, which
+	// sees the file disappear, fall back to the same default.
+	{
+		EmuOvlItem* im = find_input_mode_item(&s_overlayConfig);
+		if (im) {
+			int mode = default_input_mode();
+			im->current_value = mode;
+			im->staged_value = mode;
+			im->dirty = false;
+			apply_input_mode(mode);
+		}
+	}
 }
 
 static void handle_overlay_action(EmuOvlAction action) {

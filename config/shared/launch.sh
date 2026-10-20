@@ -305,9 +305,11 @@ else
     ANISO_SET="--set Video-GLideN64[anisotropy]=$DEVICE_ANISOTROPY"
 fi
 
-# D-pad↔joystick input mode is handled by trimui_inputd via flag files
-# in /tmp/trimui_inputd/. emu_frontend applies the per-game mode at init
-# time and toggles on user action. Flag files are cleaned up on exit.
+# D-pad↔joystick input mode is per game. emu_frontend writes it into the
+# per-game cfg at init time and on user action. Brick's trimui_inputd follows
+# flag files in /tmp/trimui_inputd/ (cleaned up on exit); on every other device
+# input-sdl reads $EMU_INPUT_MODE_FILE and remaps in software.
+export EMU_INPUT_MODE_FILE="$PER_GAME_CFG"
 
 # Runtime button remap file for immediate application in input-sdl
 export EMU_BUTTON_MAP_FILE="$PER_GAME_DIR/$ROM_BASE.buttons"

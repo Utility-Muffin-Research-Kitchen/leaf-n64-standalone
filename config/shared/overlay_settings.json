@@ -149,7 +149,7 @@
         {
           "key": "input_mode",
           "label": "Input Mode",
-          "description": "Route the physical d-pad through the N64 analog stick",
+          "description": "Joystick: d-pad steers the analog stick. D-Pad: d-pad stays the N64 d-pad",
           "type": "cycle",
           "values": [
             0,
