@@ -492,6 +492,10 @@ export EMU_DISABLE_NEXTUI_MARKERS="${EMU_DISABLE_NEXTUI_MARKERS:-1}"
 export EMU_PER_GAME_CFG="$PER_GAME_CFG"
 export EMU_BUTTON_MAP_FILE="$PER_GAME_DIR/$ROM_BASE.buttons"
 rm -f "$EMU_BUTTON_MAP_FILE"
+# Per-game d-pad mode (joystick vs d-pad). The overlay writes it into the
+# per-game cfg and input-sdl polls this path, so the Input Mode toggle and its
+# shortcut take effect without restarting the game.
+export EMU_INPUT_MODE_FILE="$PER_GAME_CFG"
 
 mkdir -p "$HOME" "$XDG_DATA_HOME"
 

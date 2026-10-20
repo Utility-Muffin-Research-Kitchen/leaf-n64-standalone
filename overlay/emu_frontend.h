@@ -99,15 +99,17 @@ extern int g_frameSkip;
 // 0 = 100% (default), 25/50/75 = output percentage
 extern int g_analogSensitivity;
 
-// N64 button mapping (10 remappable action buttons)
+// N64 button mapping (10 remappable action buttons). The N64 d-pad is not a
+// remap target: it is permanently the physical d-pad. D-pad directions can
+// still be used as a *source* for these buttons (see emu_frontend.c).
 #define N64_REMAP_COUNT 10
 typedef struct {
 	const char* name;       // display name: "A Button", "Z Trig", etc.
 	const char* cfg_key;    // mupen64plus.cfg key in [Input-SDL-Control1]
 	unsigned int n64_bit;   // N64 button bit in controller.buttons.Value
-	int physical;           // SDL button index, or encoded axis (-1 = unbound)
-	int is_axis;            // 0 = button, 1 = axis
-	int axis_dir;           // +1 or -1 for axes
+	int physical;           // SDL button index, axis index, or hat index (-1 = unbound)
+	int is_axis;            // 0 = button, 1 = axis, 2 = hat direction
+	int axis_dir;           // +1 or -1 for axes; SDL_HAT_* bit for hats
 	int mod;                // modifier: 0=none, button index for MENU/SELECT/etc
 	int default_physical;   // factory default physical
 	int default_is_axis;
