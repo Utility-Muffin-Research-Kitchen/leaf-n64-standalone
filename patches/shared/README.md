@@ -78,7 +78,7 @@ Wires the Rice video plugin into the same `emu_frontend` overlay module as GLide
 
 - **`projects/unix/Makefile`**: adds the overlay source files as build targets (`OVERLAY_DIR = ../../../../overlay`), includes the overlay and cJSON header paths, and links SDL2_ttf and SDL2_image.
 - **`src/Video.cpp`**: includes `emu_frontend.h` (via `extern "C"`), adds four static `rice_*` plugin-op callback functions, adds `ensure_frontend_init()` that fills `EmuFrontendCoreAPI` + `EmuFrontendPluginOps` and calls `emu_frontend_init()`, and calls `emu_frontend_frame(windowSetting.uDisplayWidth, windowSetting.uDisplayHeight)` at the end of `UpdateScreen()`.
-- **`src/TextureManager.cpp`**: enables the texture cache's memory accounting (32 MiB cap) and makes the eviction path safe, so games that rebuild a texture every frame (animated/palette-cycling textures) no longer grow the cache without bound. Paper Mario's fortune-telling scene used to reach 874 MB RSS and get OOM-killed on a 1 GB device; it now holds at ~283 MB. Mirrors `mupen64plus/mupen64plus-video-rice#127`.
+- **`src/TextureManager.cpp`**: enables the texture cache's memory accounting (a 32 MiB cap on texture data) and makes the eviction path safe, so games that rebuild a texture every frame (animated/palette-cycling textures) no longer grow the cache without bound. Paper Mario's fortune-telling scene used to reach 874 MB RSS and get OOM-killed on a 1 GB device; it now holds at ~283 MB. Mirrors `mupen64plus/mupen64plus-video-rice#127`.
 
 Rice's plugin ops are simpler than GLideN64's because Rice is single-threaded:
 - `rice_exec_on_video_thread(fn, ctx)` just calls `fn(ctx)` directly (no thread dispatch needed).

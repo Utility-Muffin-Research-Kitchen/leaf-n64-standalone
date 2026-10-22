@@ -556,7 +556,7 @@ index 7fbbcaa..17e1b43 100644
      BOOL    screenSaverStatus;
  
 diff --git a/src/TextureManager.cpp b/src/TextureManager.cpp
-index 3b55ff9..c26c81a 100644
+index 3b55ff9..1a08875 100644
 --- a/src/TextureManager.cpp
 +++ b/src/TextureManager.cpp
 @@ -33,9 +33,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -571,7 +571,17 @@ index 3b55ff9..c26c81a 100644
  
  // Returns the first prime greater than or equal to nFirst
  inline int GetNextPrime(int nFirst)
-@@ -234,6 +234,10 @@ void CTextureManager::RecycleAllTextures()
+@@ -153,9 +153,6 @@ void CTextureManager::PurgeOldTextures()
+     if (m_pCacheTxtrList == NULL)
+         return;
+     
+-    if (g_bUseSetTextureMem)
+-        return;
+-
+     static const uint32 dwFramesToKill = 5*30;          // 5 secs at 30 fps
+     static const uint32 dwFramesToDelete = 30*30;       // 30 secs at 30 fps
+     
+@@ -234,6 +231,10 @@ void CTextureManager::RecycleAllTextures()
              RecycleTexture(pTVictim);
          }
      }
@@ -582,7 +592,7 @@ index 3b55ff9..c26c81a 100644
  }
  
  void CTextureManager::RecheckHiresForAllTextures()
-@@ -445,9 +449,24 @@ void CTextureManager::RemoveTexture(TxtrCacheEntry * pEntry)
+@@ -445,9 +446,24 @@ void CTextureManager::RemoveTexture(TxtrCacheEntry * pEntry)
                      pEntry->pLastYoungest->pNextYoungest = pEntry->pNextYoungest;
                  }
  
@@ -610,19 +620,20 @@ index 3b55ff9..c26c81a 100644
                  delete pEntry;
              }
              else
-@@ -474,14 +493,30 @@ TxtrCacheEntry * CTextureManager::CreateNewCacheEntry(uint32 dwAddr, uint32 dwWi
+@@ -474,14 +490,33 @@ TxtrCacheEntry * CTextureManager::CreateNewCacheEntry(uint32 dwAddr, uint32 dwWi
          uint32 heightToCreate = dwHeight;
          unsigned int freeUpSize = (widthToCreate * heightToCreate * 4) + g_amountToFree;
  
 -        // make sure there is enough room for the new texture by deleting old textures
 -        while ((m_currentTextureMemUsage + freeUpSize) > g_maxTextureMemUsage && m_pOldestTexture != NULL)
 +        // Evict the least recently used textures until the new one fits.
-+        // A texture unit can pin a few entries, so the attempt count is capped:
-+        // otherwise a cache full of bound textures would spin here forever.
-+        for (int attempt = 0;
-+             attempt < 64 && (m_currentTextureMemUsage + freeUpSize) > g_maxTextureMemUsage
-+                && m_pOldestTexture != NULL;
-+             ++attempt)
++        // Only entries bound to a texture unit can stall this loop, and there
++        // are at most MAX_TEXTURES of them, so the *skips* are bounded instead
++        // of the evictions: capping total attempts would stop freeing too early
++        // when many small textures have to go to make room for a large one.
++        int skipped = 0;
++        while ((m_currentTextureMemUsage + freeUpSize) > g_maxTextureMemUsage
++               && m_pOldestTexture != NULL)
          {
 -            TxtrCacheEntry *nextYoungest = m_pOldestTexture->pNextYoungest;
 +            TxtrCacheEntry *victim = m_pOldestTexture;
@@ -632,17 +643,19 @@ index 3b55ff9..c26c81a 100644
 -            m_pOldestTexture = nextYoungest;
 +            if (TCacheEntryIsLoaded(victim))
 +            {
-+                // Still bound to a texture unit, so it cannot be freed yet.
-+                // Move it to the young end so the next attempt picks another
-+                // entry; if it is also the youngest there is nothing else left.
-+                if (victim == m_pYoungestTexture)
++                // At most MAX_TEXTURES entries can be bound; past that we are
++                // cycling through the same ones.
++                if (victim == m_pYoungestTexture || ++skipped > MAX_TEXTURES)
 +                    break;
 +                MakeTextureYoungest(victim);
 +            }
 +            else
 +            {
-+                // RemoveTexture() keeps m_pOldestTexture/m_pYoungestTexture valid.
 +                RemoveTexture(victim);
++                // Not found in the hash table, so nothing was unlinked: stop
++                // rather than spin on the same entry.
++                if (m_pOldestTexture == victim)
++                    break;
 +            }
  
          //printf("Freeing Texture\n");
